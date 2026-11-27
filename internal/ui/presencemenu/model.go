@@ -3,19 +3,22 @@
 package presencemenu
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/ansi"
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/core"
+	slkemoji "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/styles"
-	"github.com/muesli/reflow/truncate"
 )
 
 const (
@@ -27,20 +30,31 @@ const (
 	ActionSetWFH       = core.PresenceSetWFH
 	ActionSetVacation  = core.PresenceSetVacation
 	ActionClearStatus  = core.PresenceClearStatus
+	ActionSetCustom    = core.PresenceSetCustom
+	ActionSetRecent    = core.PresenceSetRecent
 )
+
+// maxVisibleRows is how many rows the menu shows before it scrolls:
+// with the separator and its chrome it is 22 lines, inside 80x24.
+const maxVisibleRows = 14
+
+// MaxRecentRows caps the recent statuses shown, as Slack's own menu does.
+const MaxRecentRows = 5
 
 // Result is returned when the user commits a selection.
 type Result struct {
 	Action        core.PresenceAction
-	SnoozeMinutes int // populated when Action == ActionSnooze
+	SnoozeMinutes int               // populated when Action == ActionSnooze
+	Recent        core.RecentStatus // populated when Action == ActionSetRecent
 }
 
 // item is a single row in the menu.
 type item struct {
 	label   string
 	action  core.PresenceAction
-	minutes int  // for ActionSnooze
-	current bool // currently-active row (decorated, still selectable)
+	minutes int                // for ActionSnooze
+	recent  *core.RecentStatus // for ActionSetRecent
+	current bool               // currently-active row (decorated, still selectable)
 }
 
 // Model is the picker overlay.
@@ -62,6 +76,18 @@ type Model struct {
 	// visibility must check both, not text alone.
 	currentStatusText  string
 	currentStatusEmoji string
+	// currentStatusName is that status's emoji name without colons
+	// (SetCurrentStatusEmojiName): recent rows match on it, since
+	// distinct custom emoji can share a fallback glyph.
+	currentStatusName string
+
+	// recent is the user's recent statuses from Slack, newest first,
+	// set via SetRecent; deduped and capped when the rows are built.
+	recent []core.RecentStatus
+
+	// emojiCtx draws a recent status's emoji as an image when image
+	// mode is on (SetEmojiContext, SetEmojiCustoms).
+	emojiCtx messages.EmojiContext
 }
 
 var _ interface {
@@ -84,9 +110,53 @@ func (m *Model) OpenWith(workspaceName, presence string, dndEnabled bool, dndEnd
 	m.workspaceName = workspaceName
 	m.currentPres = presence
 	m.dndActive = dndEnabled && (dndEnd.IsZero() || time.Now().Before(dndEnd))
-	m.items = buildItems(presence, m.dndActive, m.currentStatusText, m.currentStatusEmoji)
+	m.items = buildItems(presence, m.dndActive, m.currentStatusText, m.currentStatusEmoji, m.currentStatusName, m.recent)
 	m.filter()
 }
+
+// SetEmojiContext configures drawing recent-status emoji as images.
+// The menu caches no rows, so the next View uses it.
+func (m *Model) SetEmojiContext(ctx messages.EmojiContext) { m.emojiCtx = ctx }
+
+// SetEmojiCustoms replaces only the workspace custom emoji map.
+func (m *Model) SetEmojiCustoms(customs map[string]string) { m.emojiCtx.Customs = customs }
+
+// SetRecent sets the recent statuses shown after the presets. Call it
+// before OpenWith, or while the menu is open when a fetch lands: the
+// selection stays on the row it was on.
+func (m *Model) SetRecent(recent []core.RecentStatus) {
+	m.recent = recent
+	if !m.visible {
+		return
+	}
+	var keep *item
+	if m.selected < len(m.filtered) {
+		it := m.items[m.filtered[m.selected]]
+		keep = &it
+	}
+	m.items = buildItems(m.currentPres, m.dndActive, m.currentStatusText, m.currentStatusEmoji, m.currentStatusName, m.recent)
+	m.filter()
+	m.selected = min(m.selected, max(len(m.filtered)-1, 0))
+	if keep == nil {
+		return
+	}
+	for i, idx := range m.filtered {
+		if sameRow(m.items[idx], *keep) {
+			m.selected = i
+			return
+		}
+	}
+}
+
+// sameRow reports whether a and b are the same menu row across a rebuild.
+func sameRow(a, b item) bool {
+	// Not minutes: "Snooze until tomorrow morning" recomputes them.
+	return a.label == b.label && a.action == b.action
+}
+
+// SetCurrentStatusEmojiName records the current status's emoji name
+// (no colons, "" for none). Call before OpenWith.
+func (m *Model) SetCurrentStatusEmojiName(name string) { m.currentStatusName = name }
 
 // SetCurrentCustomStatus records the profile status currently applied
 // (from presenceController's cache), so the next OpenWith call marks
@@ -138,12 +208,16 @@ func (m Model) currentItemLabels() []string {
 // width measurement and the terminal's actual cell width agree. Mixed
 // emoji width — particularly the moon — caused the modal's right
 // border to not draw correctly in some terminals.
-func buildItems(presence string, dndActive bool, statusText, statusEmoji string) []item {
+func buildItems(presence string, dndActive bool, statusText, statusEmoji, statusName string, recent []core.RecentStatus) []item {
 	rows := []item{
 		{label: "Active", action: ActionSetActive, current: presence == "active" && !dndActive},
 		{label: "Away", action: ActionSetAway, current: presence == "away" && !dndActive},
 		{label: "Working from home", action: ActionSetWFH, current: statusText == "Working from home"},
 		{label: "On vacation", action: ActionSetVacation, current: statusText == "On vacation"},
+		{label: "Set a status...", action: ActionSetCustom},
+	}
+	rows = append(rows, recentItems(recent, statusText, statusName)...)
+	rows = append(rows, []item{
 		{label: "Snooze for 20 minutes", action: ActionSnooze, minutes: 20},
 		{label: "Snooze for 1 hour", action: ActionSnooze, minutes: 60},
 		{label: "Snooze for 2 hours", action: ActionSnooze, minutes: 120},
@@ -152,7 +226,7 @@ func buildItems(presence string, dndActive bool, statusText, statusEmoji string)
 		{label: "Snooze for 24 hours", action: ActionSnooze, minutes: 1440},
 		{label: "Snooze until tomorrow morning", action: ActionSnooze, minutes: minutesUntilTomorrowMorning(time.Now())},
 		{label: "Snooze custom...", action: ActionCustomSnooze},
-	}
+	}...)
 	if statusText != "" || statusEmoji != "" {
 		rows = append(rows, item{label: "Clear status", action: ActionClearStatus})
 	}
@@ -160,6 +234,80 @@ func buildItems(presence string, dndActive bool, statusText, statusEmoji string)
 		rows = append(rows, item{label: "End snooze / DND", action: ActionEndDND})
 	}
 	return rows
+}
+
+// recentItems turns the recent statuses into rows: newest first, at
+// most MaxRecentRows, without entries that repeat a preset or a newer
+// entry. A row is current when its text and emoji name match the
+// status now set (statusName: emoji name without colons).
+func recentItems(recent []core.RecentStatus, statusText, statusName string) []item {
+	seen := map[[2]string]bool{
+		{"Working from home", ":house:"}: true,
+		{"On vacation", ":palm_tree:"}:   true,
+	}
+	var rows []item
+	for _, r := range recent {
+		key := [2]string{r.Text, r.Emoji}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		rows = append(rows, item{
+			label:   strings.TrimSpace(r.Emoji + " " + r.Text),
+			action:  ActionSetRecent,
+			recent:  &r,
+			current: r.Text == statusText && strings.Trim(r.Emoji, ":") == statusName,
+		})
+		if len(rows) == MaxRecentRows {
+			break
+		}
+	}
+	return rows
+}
+
+// recentLabel is how a recent row draws: the emoji as an image (returned
+// separately, to go after the text) when image mode can place it, else
+// its Unicode glyph before the text, else its :shortcode:.
+func (m Model) recentLabel(r core.RecentStatus) (line, image string) {
+	name := strings.Trim(r.Emoji, ":")
+	if name == "" {
+		return r.Text, ""
+	}
+	if placed, flush, ok := m.emojiCtx.PlaceShortcode(name); ok {
+		if flush != nil {
+			_ = flush(imgpkg.KittyOutput)
+		}
+		return r.Text, placed
+	}
+	glyph := slkemoji.CodeMap()[":"+slkemoji.StripSkinTone(name)+":"]
+	if !slkemoji.ShouldRenderUnicode(glyph) {
+		glyph = ":" + name + ":"
+	}
+	return strings.TrimSpace(glyph + " " + r.Text), ""
+}
+
+// window is the range of m.filtered on screen.
+func (m Model) window() (start, end int) {
+	return chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
+}
+
+// recentSeparator is the index into m.filtered of the first recent row
+// when a line separates the recent rows from the presets above them
+// inside the window [start, end); -1 otherwise. Only the unfiltered
+// list has the line.
+func (m Model) recentSeparator(start, end int) int {
+	if m.query != "" {
+		return -1
+	}
+	for i, idx := range m.filtered {
+		if m.items[idx].action == ActionSetRecent {
+			if i > start && i < end {
+				return i
+			}
+			return -1
+		}
+	}
+	return -1
 }
 
 // minutesUntilTomorrowMorning returns the number of minutes from now until
@@ -202,13 +350,17 @@ func boxWidth(termWidth int) int {
 	return w
 }
 
-// BoxSize returns the rendered modal box's outer dimensions. The presence
-// menu renders every filtered row (no scroll window), so height grows with
-// the row count. termHeight is accepted for interface symmetry.
+// BoxSize returns the rendered modal box's outer dimensions: the rows in
+// the scroll window, plus the separator line when it is on screen.
+// termHeight is accepted for interface symmetry.
 func (m Model) BoxSize(termWidth, termHeight int) (int, int) {
-	nRows := len(m.filtered)
+	start, end := m.window()
+	nRows := end - start
 	if nRows < 1 {
 		nRows = 1
+	}
+	if m.recentSeparator(start, end) >= 0 {
+		nRows++
 	}
 	return boxWidth(termWidth), nRows + 7
 }
@@ -217,10 +369,19 @@ func (m Model) BoxSize(termWidth, termHeight int) (int, int) {
 // returns true when the click lands on a visible row.
 func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	row := localY - listTopOffset()
-	if row < 0 || row >= len(m.filtered) {
+	start, end := m.window()
+	if sep := m.recentSeparator(start, end); sep >= 0 {
+		switch {
+		case row == sep-start:
+			return false
+		case row > sep-start:
+			row--
+		}
+	}
+	if row < 0 || row >= end-start {
 		return false
 	}
-	m.selected = row
+	m.selected = start + row
 	return true
 }
 
@@ -232,7 +393,11 @@ func (m *Model) HandleKey(keyStr string) *Result {
 			return nil
 		}
 		it := m.items[m.filtered[m.selected]]
-		return &Result{Action: it.action, SnoozeMinutes: it.minutes}
+		res := &Result{Action: it.action, SnoozeMinutes: it.minutes}
+		if it.recent != nil {
+			res.Recent = *it.recent
+		}
+		return res
 	case "esc":
 		m.Close()
 		return nil
@@ -308,17 +473,29 @@ func (m Model) renderBox(termWidth int) string {
 		titleText = "Status — " + m.workspaceName
 	}
 
-	list := chrome.List{Start: 0, End: len(m.filtered), Total: len(m.filtered)}
+	start, end := m.window()
+	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
 	width := list.ContentWidth(innerWidth)
-	rows := make([]string, 0, len(m.filtered))
-	for i, idx := range m.filtered {
-		it := m.items[idx]
-		line := it.label
+	rows := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		it := m.items[m.filtered[i]]
+		line, image := it.label, ""
+		if it.recent != nil {
+			line, image = m.recentLabel(*it.recent)
+		}
 		if it.current {
 			line = "✓ " + line
 		}
-		if lipgloss.Width(line) > width {
-			line = truncate.StringWithTail(line, uint(width), "…")
+		budget := width
+		if image != "" {
+			budget = max(width-1-m.emojiCtx.ImageCells(), 0)
+		}
+		// Cut between grapheme clusters: a recent status's text can hold
+		// ZWJ emoji, which a per-rune cut breaks into stray glyphs.
+		line = ansi.Truncate(line, budget)
+		if image != "" {
+			// After truncation, so it is never cut: an image is charged its cells.
+			line += " " + image
 		}
 		style := s.Row
 		switch {
@@ -330,10 +507,16 @@ func (m Model) renderBox(termWidth int) string {
 		rows = append(rows, style.Width(width).Render(line))
 	}
 
+	body := list.Rows(s, m.selected, rows)
+	if sep := m.recentSeparator(start, end); sep >= 0 {
+		line := " " + lipgloss.NewStyle().Background(styles.ThemeBackground()).Foreground(styles.Border).
+			Render(strings.Repeat("─", width)) + list.Gutter(s, sep)
+		body = slices.Insert(body, sep-start, line)
+	}
 	return chrome.Frame{
 		Title: titleText,
 		Input: chrome.FilterInput(s, m.query, "Type to filter…"),
-		Body:  list.Rows(s, m.selected, rows),
+		Body:  body,
 		Empty: "No matching options",
 	}.Render(s, overlayWidth)
 }

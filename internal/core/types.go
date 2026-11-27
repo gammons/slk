@@ -171,6 +171,8 @@ const (
 	PresenceSetWFH      // custom status preset: "Working from home"
 	PresenceSetVacation // custom status preset: "On vacation"
 	PresenceClearStatus // clears the profile status text/emoji; leaves presence/DND alone
+	PresenceSetCustom   // opens the status dialog; the status itself goes through SetCustomStatus
+	PresenceSetRecent   // re-applies a recent status from Slack's list; goes through SetCustomStatus
 )
 
 // ThemeScope identifies whether a theme selection should be saved to
@@ -314,4 +316,22 @@ type Theme struct {
 	Text        string `toml:"text"`
 	TextMuted   string `toml:"text_muted"`
 	Border      string `toml:"border"`
+}
+
+// RecentStatus is one entry of the user's recent statuses, as Slack's
+// own clients list them (users.customStatus.list). Emoji is ":name:" or
+// "". Created and Expire are Unix seconds; Expire is 0 when the status
+// never cleared.
+type RecentStatus struct {
+	Text, Emoji     string
+	Created, Expire int64
+}
+
+// Expiry is when this status clears if set again at now: the same
+// length as the first time, or 0 when it had none.
+func (r RecentStatus) Expiry(now time.Time) int64 {
+	if r.Created <= 0 || r.Expire <= r.Created {
+		return 0
+	}
+	return now.Unix() + r.Expire - r.Created
 }

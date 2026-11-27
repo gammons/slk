@@ -44,6 +44,9 @@ func handleReactionPickerMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	messageTSStr := a.reactionPicker.MessageTS()
 
 	result := a.reactionPicker.HandleKey(keyStr)
+	if a.statusEmojiPick {
+		return a.statusEmojiPicked(result)
+	}
 
 	if !a.reactionPicker.IsVisible() {
 		// Esc was pressed.

@@ -85,7 +85,10 @@
 | Click | Any (on image) | Open full-screen preview |
 | `Ctrl+y` | Any | Switch theme |
 | `Alt+y` / `Alt+Shift+y` | Normal | Next / previous theme (wraps; saved per workspace) |
-| `Ctrl+s` | Any | Set status (Active / Away / DND snooze / Working from home / On vacation / Clear status) |
+| `Ctrl+s` | Any | Set status (Active / Away / DND snooze / Working from home / On vacation / Set a status... / Clear status) |
+| `Tab` | Set a status | Pick the status emoji; Enter in the picker returns to the dialog, Esc returns without one |
+| `Up` / `Down`, `Ctrl+p` / `Ctrl+n` | Set a status | Choose when the status clears |
+| `Enter` / `Esc` | Set a status | Set the status / cancel without changing it |
 | `q` | Normal | Close the thread pane (does nothing when none is open) |
 | `Q` | Normal | Quit (with confirmation) |
 | `Ctrl+c` | Any | Quit (with confirmation) |

@@ -91,6 +91,10 @@ func TestQuitPromptClosesEveryModal(t *testing.T) {
 			func(a *App) { a.slackLinkInput = "https://example.slack.com" },
 			nil,
 		},
+		ModeStatusDialog: {
+			func(a *App) { a.statusDialog.Open("Acme") },
+			func(a *App) bool { return a.statusDialog.IsVisible() },
+		},
 		ModeAppView: {
 			func(a *App) {
 				a.appView.SetView(&core.AppView{ViewID: "V1", Title: "AI Budget Support"})

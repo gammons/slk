@@ -427,6 +427,14 @@ type PresenceService interface {
 	// for PresenceSnooze.
 	SetStatus(action PresenceAction, snoozeMinutes int)
 
+	// SetCustomStatus sets the user's own status text and emoji on the
+	// active workspace; expiration is Unix seconds, 0 for no expiry.
+	SetCustomStatus(text, emoji string, expiration int64)
+
+	// RecentStatuses fetches the user's recent statuses in workspace
+	// teamID, newest first. Blocking; call it from a tea.Cmd.
+	RecentStatuses(teamID string) ([]RecentStatus, error)
+
 	// SendTyping broadcasts a typing indicator for channelID. Called off
 	// the Update goroutine.
 	SendTyping(channelID string)

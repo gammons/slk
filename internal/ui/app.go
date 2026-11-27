@@ -689,6 +689,18 @@ type App struct {
 	slackLinkInput string
 	slackLinkError string
 
+	// statusDialog is the Ctrl+S "Set a status..." dialog.
+	// statusEmojiPick is set while the reaction picker is open on its
+	// behalf, so the pick goes back to the dialog instead of a message.
+	statusDialog    presencemenu.StatusDialog
+	statusEmojiPick bool
+	// recentStatuses is the last good recent-status list per team ID,
+	// shown at once when Ctrl+S opens while a fresh fetch runs.
+	recentStatuses map[string][]core.RecentStatus
+	// recentStatusSeq numbers recent-status fetches; replies to all
+	// but the latest are dropped.
+	recentStatusSeq int
+
 	// marks owns the vim-style mark storage: an in-memory per-workspace
 	// tier for lowercase marks plus the SQLite `marks` table, merged
 	// behind one set of accessors (see internal/ui/marks.go).
@@ -1334,6 +1346,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceReactions,
 		reduceThreads,
 		reduceActivity,
+		reduceRecentStatuses,
 		reduceAppHome,
 		reduceAppView,
 		reduceFocus,
@@ -2634,6 +2647,11 @@ func (a *App) closeModal(mode Mode) {
 		a.channelFinder.Close()
 	case ModeReactionPicker:
 		a.reactionPicker.Close()
+		// Still set means the picker is closing some other way than
+		// back into the status dialog (e.g. ctrl+c), so the dialog goes too.
+		if a.statusEmojiPick {
+			a.closeStatusDialog()
+		}
 	case ModeWorkspaceFinder:
 		a.workspaceFinder.Close()
 	case ModeThemeSwitcher:
@@ -2668,6 +2686,11 @@ func (a *App) closeModal(mode Mode) {
 	case ModeOpenSlackLink:
 		a.slackLinkInput = ""
 		a.slackLinkError = ""
+	case ModeStatusDialog:
+		// Tab hands over to the emoji picker; the dialog waits behind it.
+		if !a.statusEmojiPick {
+			a.closeStatusDialog()
+		}
 	case ModeAppView:
 		// A button chooser changes mode while staying over the dialog;
 		// it asks for the content to be kept. Every other exit drops
@@ -3572,6 +3595,7 @@ func (a *App) SetEmojiContext(ctx messages.EmojiContext) {
 	a.threadPanel.SetEmojiContext(ctx)
 	a.sidebar.SetEmojiContext(ctx)
 	a.channelFinder.SetEmojiContext(ctx)
+	a.presenceMenu.SetEmojiContext(ctx)
 	a.reactionPicker.SetEmojiContext(reactionpicker.EmojiContext{
 		PlaceCtx: ctx.PlaceCtx,
 		Cells:    ctx.Cells,
@@ -3974,6 +3998,7 @@ func (a *App) SetCustomEmoji(customs map[string]string) {
 	a.threadPanel.SetEmojiCustoms(customs)
 	a.sidebar.SetEmojiCustoms(customs)
 	a.channelFinder.SetEmojiCustoms(customs)
+	a.presenceMenu.SetEmojiCustoms(customs)
 	a.reactionPicker.SetEmojiCustoms(customs)
 	// Compose autocomplete dropdowns (main + thread) also need the
 	// customs map for View()-time URL resolution; without this, custom

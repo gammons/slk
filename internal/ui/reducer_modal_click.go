@@ -79,6 +79,9 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 		return modalClickTarget{box: &a.themeSwitcher, click: &a.themeSwitcher, activation: enter}, true
 	case ModePresenceMenu:
 		return modalClickTarget{box: &a.presenceMenu, click: &a.presenceMenu, activation: enter}, true
+	case ModeStatusDialog:
+		// A click picks when the status clears; Enter still sets it.
+		return modalClickTarget{box: &a.statusDialog, click: &a.statusDialog, activation: nil}, true
 	case ModeReactionPicker:
 		return modalClickTarget{box: a.reactionPicker, click: a.reactionPicker, activation: enter}, true
 	case ModeNewMessage:

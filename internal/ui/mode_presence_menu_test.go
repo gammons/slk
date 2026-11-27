@@ -13,9 +13,9 @@ import (
 
 // presenceMenuAllRows is the unfiltered row count for a menu opened
 // without DND active and no custom status set: Active, Away, Working
-// from home, On vacation, six fixed snoozes, "until tomorrow morning",
-// and "Snooze custom...".
-const presenceMenuAllRows = 12
+// from home, On vacation, "Set a status...", six fixed snoozes, "until
+// tomorrow morning", and "Snooze custom...".
+const presenceMenuAllRows = 13
 
 // openPresenceMenu mirrors the production open path
 // (mode_normal.go:228-231) for a workspace with no DND, and records
@@ -565,11 +565,11 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			key:      keyPress('a'),
 			wantMode: ModePresenceMenu,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				// "Active" and "Away" prefix-match; "On vacation"
-				// substring-matches via "vacation"; no snooze label
+				// "Active" and "Away" prefix-match; "On vacation" and
+				// "Set a status..." substring-match; no snooze label
 				// contains an "a".
-				if got := modalRows(&a.presenceMenu); got != 3 {
-					t.Errorf("rows = %d, want 3 after filtering on \"a\"", got)
+				if got := modalRows(&a.presenceMenu); got != 4 {
+					t.Errorf("rows = %d, want 4 after filtering on \"a\"", got)
 				}
 			},
 		},
@@ -578,7 +578,7 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			opts: opts,
 			setup: func(t *testing.T, a *App) {
 				open(t, a)
-				typePresenceQuery(t, a, "a", 3)
+				typePresenceQuery(t, a, "a", 4)
 			},
 			key:      keyCode(tea.KeyBackspace),
 			wantMode: ModePresenceMenu,

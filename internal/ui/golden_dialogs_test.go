@@ -240,6 +240,15 @@ func dialogGoldens() []dialogGolden {
 			},
 		},
 		{
+			name: "dialog_presence_menu_recent", want: "☕ On a break", shown: presShown,
+			open: func(t *testing.T, a *App) {
+				a.presenceMenu.SetRecent([]core.RecentStatus{{Text: "On a break", Emoji: ":coffee:"}, {Text: "Heads down"}})
+				a.presenceMenu.OpenWith("Acme", "active", false, time.Time{})
+				repeat(6, func() { a.presenceMenu.HandleKey("down") })
+				a.SetMode(ModePresenceMenu)
+			},
+		},
+		{
 			name: "dialog_presence_menu_no_match", want: "No matching options", shown: presShown,
 			open: func(t *testing.T, a *App) {
 				a.presenceMenu.OpenWith("Acme", "active", false, time.Time{})
@@ -253,6 +262,24 @@ func dialogGoldens() []dialogGolden {
 			open: func(t *testing.T, a *App) {
 				a.slackLinkInput = "https://acme.slack.com/archives/C1/p1700000000000000"
 				a.SetMode(ModeOpenSlackLink)
+			},
+		},
+		{
+			name: "dialog_status", want: "Set a status — Acme",
+			shown: func(a *App) bool { return a.mode == ModeStatusDialog },
+			open: func(t *testing.T, a *App) {
+				a.statusDialog.Open("Acme")
+				a.statusDialog.SetEmoji("coffee")
+				a.statusDialog.Insert("On a break")
+				a.SetMode(ModeStatusDialog)
+			},
+		},
+		{
+			name: "dialog_status_empty", want: "What's your status?",
+			shown: func(a *App) bool { return a.mode == ModeStatusDialog },
+			open: func(t *testing.T, a *App) {
+				a.statusDialog.Open("Acme")
+				a.SetMode(ModeStatusDialog)
 			},
 		},
 		{

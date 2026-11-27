@@ -321,8 +321,11 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
 		statusText, statusEmoji := a.presence.CustomStatus(a.currentUserID)
 		a.presenceMenu.SetCurrentCustomStatus(statusText, statusEmoji)
+		a.presenceMenu.SetCurrentStatusEmojiName(a.presence.CustomStatusEmojiName(a.currentUserID))
+		a.presenceMenu.SetRecent(a.recentStatuses[a.activeTeamID])
 		a.presenceMenu.OpenWith(header, pres, dndEnabled, dndEnd)
 		a.SetMode(ModePresenceMenu)
+		return a.fetchRecentStatuses()
 
 	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
 		a.channelFinder.SetUnread(a.sidebar.UnreadChannelIDs())

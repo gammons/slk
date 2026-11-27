@@ -198,7 +198,7 @@ func (a *App) setStatusReporterForTest(fn func(unread, otherUnread int, workspac
 }
 
 func (a *App) setStatusSetterForTest(fn func(action core.PresenceAction, snoozeMinutes int)) {
-	a.SetPresenceService(core.NewPresenceService(fn, nil))
+	a.SetPresenceService(core.NewPresenceService(fn, nil, nil, nil))
 }
 
 func (a *App) setThemeSaverForTest(fn func(teamID, name string, scope core.ThemeScope)) {
