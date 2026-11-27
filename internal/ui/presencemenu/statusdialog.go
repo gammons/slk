@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
 
+	"github.com/gammons/slk/internal/bubbles/ansi"
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
@@ -63,12 +64,15 @@ func (d *StatusDialog) SetEmoji(name string) {
 
 // Insert appends typed or pasted text. Line breaks become spaces, other
 // control characters are dropped, and the text stops at MaxStatusText.
+// Emoji joiners and tag characters are format characters, not controls:
+// they are kept so a pasted 👨‍👩‍👧 or flag stays one emoji.
 func (d *StatusDialog) Insert(s string) {
 	for _, r := range s {
 		if r == '\n' || r == '\r' || r == '\t' {
 			r = ' '
 		}
-		if !unicode.IsPrint(r) || utf8.RuneCountInString(d.text) >= MaxStatusText {
+		emojiPart := r == '\u200d' || (r >= 0xE0020 && r <= 0xE007F)
+		if !(unicode.IsPrint(r) || emojiPart) || utf8.RuneCountInString(d.text) >= MaxStatusText {
 			continue
 		}
 		d.text += string(r)
@@ -142,15 +146,7 @@ func (d StatusDialog) renderBox(termWidth int) string {
 	if d.workspace != "" {
 		title += " — " + d.workspace
 	}
-	text := d.text
-	if budget := width - 6; lipgloss.Width(text) > budget {
-		// Keep the end in view while typing.
-		r := []rune(text)
-		for lipgloss.Width(string(r)) > budget-1 {
-			r = r[1:]
-		}
-		text = "…" + string(r)
-	}
+	text := ansi.TruncateLeft(d.text, width-6) // keep the end in view while typing
 
 	emojiLine := s.Empty.Render("Emoji: none · Tab to pick one")
 	if d.emoji != "" {

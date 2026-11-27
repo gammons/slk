@@ -180,3 +180,20 @@ func TestRecentStatusesStaleReplyIgnored(t *testing.T) {
 		t.Errorf("the earlier fetch's failure wiped the newer list:\n%s", v)
 	}
 }
+
+// Ctrl+S marks the recent row matching the user's own status by emoji
+// name: two custom emoji with the same text draw the same fallback glyph.
+func TestRecentStatusCurrentMarkedFromOwnStatus(t *testing.T) {
+	a, _ := recentApp(t, []core.RecentStatus{
+		{Text: "Focus", Emoji: ":fine-fire:"},
+		{Text: "Focus", Emoji: ":party-parrot:"},
+	}, nil)
+	a.currentUserID = "U1"
+	a.Update(UserStatusChangeMsg{UserID: "U1", Emoji: ":party-parrot:", Text: "Focus"})
+
+	a.Update(openStatusMenu(t, a))
+	v := statusMenuView(a)
+	if !strings.Contains(v, "✓ :party-parrot: Focus") || strings.Contains(v, "✓ :fine-fire:") {
+		t.Errorf("want only :party-parrot: Focus marked current:\n%s", v)
+	}
+}

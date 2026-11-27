@@ -18,7 +18,6 @@ import (
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
-	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -77,6 +76,10 @@ type Model struct {
 	// visibility must check both, not text alone.
 	currentStatusText  string
 	currentStatusEmoji string
+	// currentStatusName is that status's emoji name without colons
+	// (SetCurrentStatusEmojiName): recent rows match on it, since
+	// distinct custom emoji can share a fallback glyph.
+	currentStatusName string
 
 	// recent is the user's recent statuses from Slack, newest first,
 	// set via SetRecent; deduped and capped when the rows are built.
@@ -107,7 +110,7 @@ func (m *Model) OpenWith(workspaceName, presence string, dndEnabled bool, dndEnd
 	m.workspaceName = workspaceName
 	m.currentPres = presence
 	m.dndActive = dndEnabled && (dndEnd.IsZero() || time.Now().Before(dndEnd))
-	m.items = buildItems(presence, m.dndActive, m.currentStatusText, m.currentStatusEmoji, m.recent)
+	m.items = buildItems(presence, m.dndActive, m.currentStatusText, m.currentStatusEmoji, m.currentStatusName, m.recent)
 	m.filter()
 }
 
@@ -131,7 +134,7 @@ func (m *Model) SetRecent(recent []core.RecentStatus) {
 		it := m.items[m.filtered[m.selected]]
 		keep = &it
 	}
-	m.items = buildItems(m.currentPres, m.dndActive, m.currentStatusText, m.currentStatusEmoji, m.recent)
+	m.items = buildItems(m.currentPres, m.dndActive, m.currentStatusText, m.currentStatusEmoji, m.currentStatusName, m.recent)
 	m.filter()
 	m.selected = min(m.selected, max(len(m.filtered)-1, 0))
 	if keep == nil {
@@ -147,8 +150,13 @@ func (m *Model) SetRecent(recent []core.RecentStatus) {
 
 // sameRow reports whether a and b are the same menu row across a rebuild.
 func sameRow(a, b item) bool {
-	return a.label == b.label && a.action == b.action && a.minutes == b.minutes
+	// Not minutes: "Snooze until tomorrow morning" recomputes them.
+	return a.label == b.label && a.action == b.action
 }
+
+// SetCurrentStatusEmojiName records the current status's emoji name
+// (no colons, "" for none). Call before OpenWith.
+func (m *Model) SetCurrentStatusEmojiName(name string) { m.currentStatusName = name }
 
 // SetCurrentCustomStatus records the profile status currently applied
 // (from presenceController's cache), so the next OpenWith call marks
@@ -200,7 +208,7 @@ func (m Model) currentItemLabels() []string {
 // width measurement and the terminal's actual cell width agree. Mixed
 // emoji width — particularly the moon — caused the modal's right
 // border to not draw correctly in some terminals.
-func buildItems(presence string, dndActive bool, statusText, statusEmoji string, recent []core.RecentStatus) []item {
+func buildItems(presence string, dndActive bool, statusText, statusEmoji, statusName string, recent []core.RecentStatus) []item {
 	rows := []item{
 		{label: "Active", action: ActionSetActive, current: presence == "active" && !dndActive},
 		{label: "Away", action: ActionSetAway, current: presence == "away" && !dndActive},
@@ -208,7 +216,7 @@ func buildItems(presence string, dndActive bool, statusText, statusEmoji string,
 		{label: "On vacation", action: ActionSetVacation, current: statusText == "On vacation"},
 		{label: "Set a status...", action: ActionSetCustom},
 	}
-	rows = append(rows, recentItems(recent, statusText, statusEmoji)...)
+	rows = append(rows, recentItems(recent, statusText, statusName)...)
 	rows = append(rows, []item{
 		{label: "Snooze for 20 minutes", action: ActionSnooze, minutes: 20},
 		{label: "Snooze for 1 hour", action: ActionSnooze, minutes: 60},
@@ -230,9 +238,9 @@ func buildItems(presence string, dndActive bool, statusText, statusEmoji string,
 
 // recentItems turns the recent statuses into rows: newest first, at
 // most MaxRecentRows, without entries that repeat a preset or a newer
-// entry. A row is current when it matches the status now set
-// (statusEmoji is the glyph the status bar shows for it).
-func recentItems(recent []core.RecentStatus, statusText, statusEmoji string) []item {
+// entry. A row is current when its text and emoji name match the
+// status now set (statusName: emoji name without colons).
+func recentItems(recent []core.RecentStatus, statusText, statusName string) []item {
 	seen := map[[2]string]bool{
 		{"Working from home", ":house:"}: true,
 		{"On vacation", ":palm_tree:"}:   true,
@@ -248,7 +256,7 @@ func recentItems(recent []core.RecentStatus, statusText, statusEmoji string) []i
 			label:   strings.TrimSpace(r.Emoji + " " + r.Text),
 			action:  ActionSetRecent,
 			recent:  &r,
-			current: statusEmoji != "" && r.Text == statusText && peerstatus.EmojiGlyph(r.Emoji) == statusEmoji,
+			current: r.Text == statusText && strings.Trim(r.Emoji, ":") == statusName,
 		})
 		if len(rows) == MaxRecentRows {
 			break

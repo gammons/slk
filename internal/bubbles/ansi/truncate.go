@@ -44,3 +44,29 @@ func Truncate(s string, budget int) string {
 	}
 	return b.String() + "…"
 }
+
+// TruncateLeft is Truncate from the other end: it keeps the tail of s
+// within budget cells, starting with "…" when it cuts, so the end of a
+// long input stays in view. Cuts fall between grapheme clusters.
+func TruncateLeft(s string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	if Cells(s) <= budget {
+		return s
+	}
+	var clusters []string
+	state := -1
+	for rest := s; len(rest) > 0; {
+		var cluster string
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		clusters = append(clusters, cluster)
+	}
+	used, i := 0, len(clusters)
+	// Leave the first cell for the ellipsis.
+	for i > 0 && used+Cells(clusters[i-1]) <= budget-1 {
+		i--
+		used += Cells(clusters[i])
+	}
+	return "…" + strings.Join(clusters[i:], "")
+}

@@ -47,12 +47,43 @@ func TestRecentRowsDedupedAndCapped(t *testing.T) {
 }
 
 func TestRecentRowMarkedCurrent(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, emoji string // the status now set
+		want              string // the recent row marked current
+	}{
+		{"standard emoji", "On a break", "coffee", ":coffee: On a break"},
+		// Both customs draw as the same fallback glyph; names tell them apart.
+		{"custom emoji", "On a break", "fine-fire", ":fine-fire: On a break"},
+		{"text only", "On a break", "", "On a break"},
+	} {
+		m := New()
+		m.SetCurrentCustomStatus(tc.text, "💬")
+		m.SetCurrentStatusEmojiName(tc.emoji)
+		m.SetRecent([]core.RecentStatus{
+			{Text: "On a break", Emoji: ":coffee:"},
+			{Text: "On a break", Emoji: ":fine-fire:"},
+			{Text: "On a break", Emoji: ":party-parrot:"},
+			{Text: "On a break"},
+		})
+		m.OpenWith("W", "active", false, time.Time{})
+		if got := m.currentItemLabels(); len(got) != 2 || got[1] != tc.want {
+			t.Errorf("%s: current rows = %q, want Active and %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// "Snooze until tomorrow morning" recomputes its minutes on every
+// rebuild; rows landing must not move the highlight off it.
+func TestRecentRowsKeepRecomputedRowSelected(t *testing.T) {
 	m := New()
-	m.SetCurrentCustomStatus("On a break", "☕")
-	m.SetRecent([]core.RecentStatus{{Text: "On a break", Emoji: ":coffee:"}, {Text: "On a break", Emoji: ":tea:"}})
 	m.OpenWith("W", "active", false, time.Time{})
-	if got := m.currentItemLabels(); len(got) != 2 || got[1] != ":coffee: On a break" {
-		t.Errorf("current rows = %q, want Active and :coffee: On a break", got)
+	for m.items[m.filtered[m.selected]].label != "Snooze until tomorrow morning" {
+		m.HandleKey("down")
+	}
+	m.items[m.filtered[m.selected]].minutes-- // as if built a minute earlier
+	m.SetRecent([]core.RecentStatus{{Text: "Lunch"}})
+	if got := m.items[m.filtered[m.selected]].label; got != "Snooze until tomorrow morning" {
+		t.Errorf("highlight moved to %q", got)
 	}
 }
 

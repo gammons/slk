@@ -29,3 +29,24 @@ func TestCellsUsesTheWiderMeasure(t *testing.T) {
 		t.Errorf("Cells(empty) = %d, want 0", Cells(""))
 	}
 }
+
+func TestTruncateLeftKeepsTheTailWhole(t *testing.T) {
+	const fam = "👨‍👩‍👧"
+	for _, tc := range []struct {
+		s      string
+		budget int
+		want   string
+	}{
+		{"hello", 10, "hello"},
+		{"hello", 4, "…llo"},
+		{"hello", 0, ""},
+		{"xxéllo", 5, "…éllo"}, // the accent stays on its letter
+		{"xxéllo", 4, "…llo"},
+		{"xx" + fam + "ab", 5, "…" + fam + "ab"},
+		{"xx" + fam + "ab", 4, "…ab"},
+	} {
+		if got := TruncateLeft(tc.s, tc.budget); got != tc.want {
+			t.Errorf("TruncateLeft(%q, %d) = %q, want %q", tc.s, tc.budget, got, tc.want)
+		}
+	}
+}

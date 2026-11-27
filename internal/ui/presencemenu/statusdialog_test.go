@@ -40,3 +40,26 @@ func TestStatusDialogTextLimit(t *testing.T) {
 		t.Errorf("text is %d characters, want %d", n, MaxStatusText)
 	}
 }
+
+// A pasted ZWJ emoji or tag flag keeps its joiners and tags.
+func TestStatusDialogKeepsEmojiSequences(t *testing.T) {
+	const fam, scotland = "👨\u200d👩\u200d👧", "🏴\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f"
+	var d StatusDialog
+	d.Open("W")
+	d.Insert("Family " + fam + " " + scotland + "\x07")
+	if want := "Family " + fam + " " + scotland; d.Text() != want {
+		t.Errorf("text = %q, want %q (control character dropped, emoji whole)", d.Text(), want)
+	}
+}
+
+// The text line keeps its end in view without detaching an accent.
+func TestStatusDialogClipsBetweenCharacters(t *testing.T) {
+	for _, n := range []int{60, 61} {
+		var d StatusDialog
+		d.Open("W")
+		d.Insert(strings.Repeat("e\u0301", n))
+		if box := d.renderBox(80); !strings.Contains(box, "…") || strings.Contains(box, "…\u0301") {
+			t.Errorf("n=%d: text clipped inside a character", n)
+		}
+	}
+}

@@ -13,6 +13,7 @@
 package ui
 
 import (
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -106,6 +107,16 @@ func (p *presenceController) CustomStatus(userID string) (text, emoji string) {
 		return "", ""
 	}
 	return st.Text, st.StatusGlyph(now)
+}
+
+// CustomStatusEmojiName is userID's live status emoji name without
+// colons ("" for none), unlike CustomStatus's display glyph.
+func (p *presenceController) CustomStatusEmojiName(userID string) string {
+	st, ok := p.peers[userID]
+	if !ok || !st.HasStatus(time.Now()) {
+		return ""
+	}
+	return strings.Trim(st.Emoji, ":")
 }
 
 // Set records the presence/DND status for teamID and returns the
