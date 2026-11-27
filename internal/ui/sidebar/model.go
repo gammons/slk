@@ -980,6 +980,24 @@ func (m *Model) setViewActive(v syntheticView) {
 	m.dirty()
 }
 
+// isActiveRow reports whether r is the destination the message pane shows.
+func (m *Model) isActiveRow(r renderRow) bool {
+	if r.active == "" {
+		return false
+	}
+
+	switch m.activeView {
+	case viewThreads:
+		return r.isThreadsRow
+	case viewDrafts:
+		return r.isDraftsRow
+	case viewActivity:
+		return r.isActivityRow
+	default:
+		return r.channelID != "" && r.channelID == m.activeID
+	}
+}
+
 // Version returns a counter that increments any time the View() output could
 // change. Callers can compare against a previously-seen version to know
 // whether to recompute downstream layout / wrapping.
@@ -3088,21 +3106,12 @@ func (m *Model) View(height, width int) string {
 		switch {
 		case r.navIdx >= 0 && r.navIdx == m.cursor:
 			cursorLine = len(visible)
-			visible = append(visible, r.selected)
-		case r.channelID != "" && r.channelID == m.activeID && m.activeView == viewNone && r.active != "":
-			// This row is the channel the user is currently viewing in
-			// the message pane (but the cursor is elsewhere). Show the
-			// orange ▌ "active" indicator so they know where they are.
-			visible = append(visible, r.active)
-		case r.isThreadsRow && m.activeView == viewThreads && r.active != "":
-			// Threads view is the currently displayed view; mark the
-			// Threads row as active with the same orange indicator.
-			visible = append(visible, r.active)
-		case r.isDraftsRow && m.activeView == viewDrafts && r.active != "":
-			visible = append(visible, r.active)
-		case r.isActivityRow && m.activeView == viewActivity && r.active != "":
-			// Activity view is the currently displayed view; mark the
-			// Activity row as active with the same orange indicator.
+			if !m.focused && m.isActiveRow(r) {
+				visible = append(visible, r.active)
+			} else {
+				visible = append(visible, r.selected)
+			}
+		case m.isActiveRow(r):
 			visible = append(visible, r.active)
 		case r.normal == "":
 			// Inter-section blank row -- emit a width-sized themed blank so

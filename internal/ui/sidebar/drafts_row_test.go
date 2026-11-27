@@ -161,6 +161,25 @@ func TestSelectDraftsRow_SurvivesARefresh(t *testing.T) {
 	}
 }
 
+func TestCursorOnActiveRow_MarkerFollowsFocus(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}, {ID: "C2", Name: "random", Type: "channel"}})
+	m.SetActiveChannelID("C1")
+
+	m.SelectByID("C2")
+	m.SetFocused(false)
+	active := rowFor(t, m.View(20, 30), "general")
+
+	m.SelectByID("C1")
+	if got := rowFor(t, m.View(20, 30), "general"); got != active {
+		t.Errorf("unfocused cursor on the active channel = %q, want the active marker %q", got, active)
+	}
+
+	m.SetFocused(true)
+	if got := rowFor(t, m.View(20, 30), "general"); got == active {
+		t.Errorf("focused cursor on the active channel still shows the active marker %q", got)
+	}
+}
+
 func TestOnlyOneDestinationIsActive(t *testing.T) {
 	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}, {ID: "C2", Name: "random", Type: "channel"}})
 	m.SetActiveChannelID("C1")
