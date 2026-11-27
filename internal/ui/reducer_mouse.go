@@ -340,6 +340,12 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if sidebarY < 0 {
 			return nil
 		}
+		// The "Find a DM..." row opens the workspace people search.
+		if a.sidebar.HitTestFindDM(sidebarY) {
+			a.sidebar.ClickAt(sidebarY)
+			a.openDMFinder()
+			return nil
+		}
 		// The sort control on the Direct Messages header flips the
 		// section's order without collapsing it.
 		if a.sidebar.HitTestSectionSort(sidebarY, x-a.layout.RailWidth()-1) {

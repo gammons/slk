@@ -195,22 +195,31 @@ func TestTransparentSelectedThreadParentHasNoHoles(t *testing.T) {
 	tint := lineCells(messages.SelectionTintBgANSI(a.threadPanel.Focused())+" ", map[string]string{})
 	want := cellBg(tint[0].attrs)
 	rows := screenCells(a.View().Content)
+	// The first tinted column can differ by one between rows: a row
+	// that starts with the pane's left border and one that starts with
+	// the selection bar. Compare the block they share.
 	var tinted []int
 	left, right := -1, -1
 	for i, row := range rows {
-		found := false
+		rowLeft, rowRight := -1, -1
 		for j, c := range row {
 			if cellBg(c.attrs) != want {
 				continue
 			}
-			found = true
-			if left < 0 || j < left {
-				left = j
+			if rowLeft < 0 {
+				rowLeft = j
 			}
-			right = max(right, j)
+			rowRight = j
 		}
-		if found {
-			tinted = append(tinted, i)
+		if rowLeft < 0 {
+			continue
+		}
+		tinted = append(tinted, i)
+		if left < 0 || rowLeft > left {
+			left = rowLeft
+		}
+		if right < 0 || rowRight < right {
+			right = rowRight
 		}
 	}
 	if len(tinted) == 0 {

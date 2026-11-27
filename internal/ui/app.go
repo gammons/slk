@@ -2377,6 +2377,10 @@ func (a *App) handleEnter() tea.Cmd {
 		if a.sidebar.IsActivitySelected() {
 			return func() tea.Msg { return ActivityViewActivatedMsg{KeepFocus: keep} }
 		}
+		if a.sidebar.IsFindDMSelected() {
+			a.openDMFinder()
+			return nil
+		}
 		// A section header? Toggle its collapse state and stay in
 		// place. Section headers are also navigable via j/k so the
 		// user can expand/collapse the firehose Channels section
@@ -3917,20 +3921,40 @@ func (a *App) SetUserGroups(groups map[string]string) {
 func (a *App) seedNewMessagePicker() {
 	users := make([]newmessagepicker.User, 0, len(a.userNames))
 	hidden := a.hiddenUsers()
+	now := time.Now()
 	for id, name := range a.userNames {
 		if id == a.currentUserID || hidden[id] {
 			continue
+		}
+		presence, _ := a.sidebar.PresenceByUser(id)
+		if a.sidebar.DNDByUser(id, now) {
+			presence = "dnd"
 		}
 		users = append(users, newmessagepicker.User{
 			ID:          id,
 			DisplayName: name,
 			Username:    name, // see scoping note; replaceable when a handle map lands
 			IsExternal:  a.externalUsers[id],
+			Presence:    presence,
 		})
 	}
 
 	a.newMessagePicker.SetCurrentUserID(a.currentUserID)
 	a.newMessagePicker.SetUsers(users)
+}
+
+// openDMFinder opens the new-message picker in its Find a DM variant.
+// The sidebar's search row calls it; Ctrl+N keeps the normal variant.
+func (a *App) openDMFinder() {
+	// The preview swallows the picker's search keys and h/l, so close it
+	// before the finder takes over the screen.
+	if a.preview.Active() {
+		a.preview.Close()
+	}
+	a.seedNewMessagePicker()
+	a.newMessagePicker.SetFinder(true)
+	a.newMessagePicker.Open()
+	a.SetMode(ModeNewMessage)
 }
 
 // SetExternalUsers replaces the set of user IDs known to be Slack

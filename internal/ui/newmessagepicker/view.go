@@ -50,16 +50,24 @@ func (m Model) renderBox(termWidth int) string {
 	innerWidth := overlayWidth - 4
 	bg := styles.ThemeBackground()
 
+	title := "New message"
+	if m.finder {
+		title = "Find a DM"
+	}
 	f := chrome.Frame{
-		Title:  "New message",
+		Title:  title,
 		Input:  m.renderInputRow(innerWidth, bg),
 		Body:   m.renderResultRows(s, innerWidth, bg),
 		Footer: m.renderFooter(innerWidth, bg),
 	}
 	if len(m.filtered) == 0 {
-		f.Empty = "No users available"
+		noun := "users"
+		if m.finder {
+			noun = "people"
+		}
+		f.Empty = "No " + noun + " available"
 		if m.query != "" {
-			f.Empty = fmt.Sprintf("No users match %q", m.query)
+			f.Empty = fmt.Sprintf("No %s match %q", noun, m.query)
 		}
 	}
 	return f.Render(s, overlayWidth)
@@ -67,7 +75,10 @@ func (m Model) renderBox(termWidth int) string {
 
 // renderInputRow renders the "To: [pill] [pill] |query█" row.
 func (m Model) renderInputRow(innerWidth int, bg color.Color) string {
-	prefix := lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted).Render("To: ")
+	prefix := ""
+	if !m.finder {
+		prefix = lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted).Render("To: ")
+	}
 
 	var b strings.Builder
 	b.WriteString(prefix)
@@ -87,7 +98,11 @@ func (m Model) renderInputRow(innerWidth int, bg color.Color) string {
 
 	queryStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 	if m.query == "" && len(m.selected) == 0 {
-		placeholder := lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted).Render("type a name…")
+		hint := "type a name…"
+		if m.finder {
+			hint = "Find a DM..."
+		}
+		placeholder := lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted).Render(hint)
 		b.WriteString(placeholder)
 	} else {
 		b.WriteString(queryStyle.Render(m.query))
@@ -119,6 +134,10 @@ func (m Model) renderResultRows(s chrome.Styles, innerWidth int, bg color.Color)
 // name, @handle, [ext] tag if external, and a trailing "✓" if the user
 // is in the pill bar. The marker column is the list's.
 func (m Model) renderRow(u User, width int, highlight bool, bg color.Color) string {
+	icon := ""
+	if m.finder {
+		icon = m.rowIcon(u, bg)
+	}
 	name := u.DisplayName
 	if u.IsExternal {
 		name += " [ext]"
@@ -145,7 +164,7 @@ func (m Model) renderRow(u User, width int, highlight bool, bg color.Color) stri
 		check = lipgloss.NewStyle().Background(bg).Foreground(styles.Accent).Render(" ✓")
 	}
 
-	line := nameRendered + handle + check
+	line := icon + nameRendered + handle + check
 	if lipgloss.Width(line) > width {
 		line = truncate.StringWithTail(line, uint(width), "…")
 	}
@@ -156,12 +175,48 @@ func (m Model) renderRow(u User, width int, highlight bool, bg color.Color) stri
 	return line
 }
 
+// rowIcon draws the finder row's one-cell initial avatar and presence
+// glyph. A real avatar can replace the initial without changing the
+// row's shape.
+func (m Model) rowIcon(u User, bg color.Color) string {
+	initial := "?"
+	if rs := []rune(u.DisplayName); len(rs) > 0 {
+		initial = strings.ToUpper(string(rs[0]))
+	}
+	icon := lipgloss.NewStyle().
+		Background(styles.UserColor(u.ID)).
+		Foreground(styles.ThemeBackground()).
+		Render(initial)
+
+	dot := " "
+	dotStyle := lipgloss.NewStyle().Background(bg)
+	switch u.Presence {
+	case "active":
+		dotStyle = dotStyle.Foreground(styles.PresenceOnline.GetForeground())
+		dot = "●"
+	case "away":
+		dotStyle = dotStyle.Foreground(styles.PresenceAway.GetForeground())
+		dot = "○"
+	case "dnd":
+		dotStyle = dotStyle.Foreground(styles.Warning)
+		dot = "⊘"
+	}
+	return icon + dotStyle.Render(dot) + " "
+}
+
 // renderFooter is the key-hints + N/8 counter row.
 func (m Model) renderFooter(innerWidth int, bg color.Color) string {
+	hint := "space toggle  enter open  esc cancel"
+	if m.finder {
+		hint = "type to filter  enter open  esc cancel"
+	}
 	left := lipgloss.NewStyle().
 		Background(bg).
 		Foreground(styles.TextMuted).
-		Render("space toggle  enter open  esc cancel")
+		Render(hint)
+	if m.finder {
+		return left
+	}
 
 	counterText := fmt.Sprintf("%d / %d", len(m.selected), MaxRecipients)
 	var counterStyle lipgloss.Style

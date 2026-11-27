@@ -82,7 +82,13 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 	case ModeReactionPicker:
 		return modalClickTarget{box: a.reactionPicker, click: a.reactionPicker, activation: enter}, true
 	case ModeNewMessage:
-		return modalClickTarget{box: &a.newMessagePicker, click: &a.newMessagePicker, activation: space}, true
+		// The finder opens on a row click; the new-message picker adds
+		// a recipient pill so its query can take the next name.
+		activation := space
+		if a.newMessagePicker.IsFinder() {
+			activation = enter
+		}
+		return modalClickTarget{box: &a.newMessagePicker, click: &a.newMessagePicker, activation: activation}, true
 	case ModeMarks:
 		return modalClickTarget{box: &a.marksOverlay, click: &a.marksOverlay, activation: enter}, true
 	case ModeDrafts:
