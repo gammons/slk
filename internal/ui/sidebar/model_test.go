@@ -43,6 +43,7 @@ func TestSidebarNavigation(t *testing.T) {
 	// Nav order: Threads → Drafts → Activity → "Channels" header → C3 → C1 → C2.
 	m.MoveDown() // onto the Drafts row
 	m.MoveDown() // onto the Activity row
+	m.MoveDown() // onto the Find a DM row
 	m.MoveDown() // onto the "Channels" section header
 	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {
 		t.Errorf("expected Channels header selected, got name=%q ok=%v", name, ok)
@@ -88,6 +89,7 @@ func TestThreadsItem_MoveDownLeavesIt(t *testing.T) {
 	m.ToggleCollapse("Channels")
 	m.MoveDown() // Drafts
 	m.MoveDown() // Activity
+	m.MoveDown() // Find a DM
 	m.MoveDown() // header
 	m.MoveDown() // first channel
 	if m.IsThreadsSelected() {
@@ -104,12 +106,16 @@ func TestThreadsItem_MoveUpReturnsToIt(t *testing.T) {
 		{ID: "C1", Name: "general", Type: "channel"},
 	})
 	m.ToggleCollapse("Channels")
+	m.MoveDown() // Find a DM
 	m.MoveDown() // header
 	m.MoveDown() // C1
 	if m.IsThreadsSelected() {
 		t.Fatalf("precondition: should be on a channel")
 	}
 	m.MoveUp() // back to header
+	m.MoveUp() // back to Find a DM
+	m.MoveUp() // back to Activity
+	m.MoveUp() // back to Drafts
 	m.MoveUp() // back to Threads
 	if !m.IsThreadsSelected() {
 		t.Errorf("MoveUp from first channel should land on Threads entry")

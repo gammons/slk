@@ -235,6 +235,7 @@ const (
 	navThreads navKind = iota
 	navDrafts
 	navActivity
+	navFindDM
 	navHeader
 	navChannel
 )
@@ -1049,6 +1050,15 @@ func (m *Model) IsActivitySelected() bool {
 	return m.nav[m.cursor].kind == navActivity
 }
 
+// IsFindDMSelected reports whether the cursor is on the "Find a DM..."
+// row above Direct Messages.
+func (m *Model) IsFindDMSelected() bool {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
+		return false
+	}
+	return m.nav[m.cursor].kind == navFindDM
+}
+
 // SelectActivityRow moves the cursor to the synthetic Activity row.
 func (m *Model) SelectActivityRow() {
 	for i, n := range m.nav {
@@ -1643,8 +1653,23 @@ func (m *Model) VisibleItems() []ChannelItem {
 // recorded at all. Used by the user-profile dialog, which shows
 // presence only when it is known.
 func (m *Model) PresenceByUser(userID string) (string, bool) {
-	p, ok := m.presenceByUser[userID]
-	return p, ok
+	if p, ok := m.presenceByUser[userID]; ok {
+		return p, true
+	}
+	// A workspace switch clears presenceByUser and restores the cached
+	// value onto the items; read it from the DM row in that window.
+	for i := range m.items {
+		if m.items[i].DMUserID == userID && m.items[i].Presence != "" {
+			return m.items[i].Presence, true
+		}
+	}
+	return "", false
+}
+
+// DNDByUser reports whether the user is in Do Not Disturb at now,
+// including a status whose deadline has not passed yet.
+func (m *Model) DNDByUser(userID string, now time.Time) bool {
+	return m.statusFor(userID).InDND(now)
 }
 
 // UpdatePresenceByUser records the authoritative live presence for a user
@@ -2007,6 +2032,8 @@ func (m *Model) currentCursorKey() (cursorKey, bool) {
 		return cursorKey{kind: navDrafts}, true
 	case navActivity:
 		return cursorKey{kind: navActivity}, true
+	case navFindDM:
+		return cursorKey{kind: navFindDM}, true
 	case navHeader:
 		return cursorKey{kind: navHeader, header: n.header}, true
 	case navChannel:
@@ -2041,7 +2068,13 @@ func (m *Model) rebuildNav() {
 	nav = append(nav, navItem{kind: navThreads})
 	nav = append(nav, navItem{kind: navDrafts})
 	nav = append(nav, navItem{kind: navActivity})
+	if !m.hasDMSection(sectionOrder) {
+		nav = append(nav, navItem{kind: navFindDM})
+	}
 	for _, name := range sectionOrder {
+		if m.isDMSection(name) {
+			nav = append(nav, navItem{kind: navFindDM})
+		}
 		nav = append(nav, navItem{kind: navHeader, header: name})
 		for _, fi := range bucket[name] {
 			if m.hiddenByCollapse(name, m.items[m.filtered[fi]], readState) {
@@ -2083,6 +2116,9 @@ func (m *Model) rebuildNavWithCursor(key cursorKey, hadKey bool) {
 			m.cursor = i
 			return
 		case key.kind == navActivity && n.kind == navActivity:
+			m.cursor = i
+			return
+		case key.kind == navFindDM && n.kind == navFindDM:
 			m.cursor = i
 			return
 		case key.kind == navHeader && n.kind == navHeader && n.header == key.header:
@@ -2213,6 +2249,8 @@ type renderRow struct {
 	// isActivityRow flags the synthetic Activity row so View() can swap
 	// in the `active` variant whenever m.activityActive is true.
 	isActivityRow bool
+	// isFindDMRow flags the "Find a DM..." row above Direct Messages.
+	isFindDMRow bool
 	// sortStart/sortEnd are the row columns of a section header's sort
 	// control. Both 0 when the row has none.
 	sortStart, sortEnd int
@@ -2263,6 +2301,7 @@ func (m *Model) buildCache(width int) {
 	threadsIdx := -1
 	draftsIdx := -1
 	activityIdx := -1
+	findDMIdx := -1
 	for i, n := range m.nav {
 		switch n.kind {
 		case navThreads:
@@ -2271,6 +2310,8 @@ func (m *Model) buildCache(width int) {
 			draftsIdx = i
 		case navActivity:
 			activityIdx = i
+		case navFindDM:
+			findDMIdx = i
 		case navHeader:
 			headerNavIdx[n.header] = i
 		case navChannel:
@@ -2446,6 +2487,12 @@ func (m *Model) buildCache(width int) {
 		navIdx:        activityIdx,
 		isActivityRow: true,
 	})
+
+	// With no Direct Messages section, the finder sits just above the
+	// first section, still reachable after Activity.
+	if !m.hasDMSection(sectionOrder) {
+		m.cacheRows = append(m.cacheRows, m.findDMRow(width, bgAnsi, cursorSelected, findDMIdx))
+	}
 
 	// Blank separator between the Threads/Drafts/Activity rows and the first
 	// section (or below them when there are no channels at all).
@@ -2716,6 +2763,9 @@ func (m *Model) buildCache(width int) {
 		if i > 0 {
 			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
+		if m.isDMSection(name) {
+			m.cacheRows = append(m.cacheRows, m.findDMRow(width, bgAnsi, cursorSelected, findDMIdx))
+		}
 		group := sectionMap[name]
 		headerLabel, headerLabelSelected, headerMentions, sortStart, sortEnd := m.renderSectionHeaderLabel(name, width, cursorSelected, dotStyle, bgAnsi)
 		ni, ok := headerNavIdx[name]
@@ -2732,6 +2782,24 @@ func (m *Model) buildCache(width int) {
 			sortEnd:   sortEnd,
 		})
 		m.cacheRows = append(m.cacheRows, group.rows...)
+	}
+}
+
+// findDMRow is the always-visible "Find a DM..." search box above the
+// Direct Messages header. It is not a section header or a conversation;
+// clicking it opens the finder.
+func (m *Model) findDMRow(width int, bgAnsi, cursor string, navIdx int) renderRow {
+	style := styles.SectionHeader.Bold(false)
+	normal := style.Width(width - 2).Render(
+		messages.ReapplyBgAfterResets(" 🔍 Find a DM...", bgAnsi))
+	selected := style.Width(width - 2).Render(
+		messages.ReapplyBgAfterResets(cursor+"🔍 Find a DM...", bgAnsi))
+	return renderRow{
+		normal:      normal,
+		selected:    selected,
+		height:      1,
+		navIdx:      navIdx,
+		isFindDMRow: true,
 	}
 }
 
@@ -2920,6 +2988,18 @@ func (m *Model) isDMSection(section string) bool {
 	for _, meta := range m.sectionsProvider.OrderedSlackSections() {
 		if meta.ID == section {
 			return meta.Type == "direct_messages"
+		}
+	}
+	return false
+}
+
+// hasDMSection reports whether order contains the Direct Messages
+// section. When it does not, the Find a DM row takes the slot just
+// above the first section instead.
+func (m *Model) hasDMSection(order []string) bool {
+	for _, name := range order {
+		if m.isDMSection(name) {
+			return true
 		}
 	}
 	return false
@@ -3163,6 +3243,19 @@ func mentionPill(arrow string, width int) string {
 	}
 	return lipgloss.PlaceHorizontal(width-2, lipgloss.Center, pill,
 		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SidebarBackground)))
+}
+
+// HitTestFindDM reports whether y is the "Find a DM..." row.
+func (m *Model) HitTestFindDM(y int) bool {
+	// View() replaces these rows with the "Unread mentions" pills.
+	if (y == m.pillTop && m.mentionAbove >= 0) || (y == m.pillBottom && m.mentionBelow >= 0) {
+		return false
+	}
+	absoluteY := y + m.yOffset
+	if absoluteY < 0 || absoluteY >= len(m.cacheRows) {
+		return false
+	}
+	return m.cacheRows[absoluteY].isFindDMRow
 }
 
 // HitTestSectionSort reports whether (y, x) is a section header's sort

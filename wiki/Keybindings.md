@@ -8,6 +8,7 @@
 | `Enter` | Normal (sidebar) | Open the selected channel, the Threads view, the Drafts view, or the Activity view (focus moves to the messages pane; `[sidebar] enter_keeps_focus = true` keeps it in the sidebar), or toggle a section header |
 | `j` / `k`, `Enter` | Normal (workspace rail) | Move the rail cursor; switch to that workspace |
 | `Space` | Normal (sidebar) | Toggle the selected section header (collapse/expand) |
+| Click | Normal (sidebar) | The `Find a DM...` box above Direct Messages opens the workspace people search; the `⇅` / `A-Z` control on the Direct Messages header changes its order |
 | `Enter` | Normal (message) | Open thread |
 | `i` | Normal | Enter insert mode |
 | `Esc` | Insert / Command | Return to normal mode |

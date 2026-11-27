@@ -38,7 +38,7 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 	expectedOrder := []string{
 		"Alerts", "alerts", "ops",
 		"Engineering", "deploys",
-		"Direct Messages", "alice", "bob",
+		"Find a DM...", "Direct Messages", "alice", "bob",
 		"Channels", "general",
 	}
 	for i, name := range expectedOrder {

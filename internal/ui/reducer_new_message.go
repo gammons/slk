@@ -38,6 +38,7 @@ var reduceNewMessagePicker reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, boo
 	switch m := msg.(type) {
 	case EnterNewMessageMsg:
 		a.seedNewMessagePicker()
+		a.newMessagePicker.SetFinder(false)
 		a.newMessagePicker.Open()
 		a.SetMode(ModeNewMessage)
 		return nil, true

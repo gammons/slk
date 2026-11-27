@@ -133,7 +133,7 @@ func TestPageDownKeepsScreenRow(t *testing.T) {
 	const height = 10
 	m := scrollFollowModel(t)
 	_ = m.View(height, 30)
-	for range 7 {
+	for range 8 {
 		m.MoveDown()
 	}
 	_ = m.View(height, 30)
@@ -219,7 +219,7 @@ func TestPageUpAtTopJumpsToFirstRow(t *testing.T) {
 	const height = 10
 	m := scrollFollowModel(t)
 	_ = m.View(height, 30)
-	for range 5 {
+	for range 6 {
 		m.MoveDown()
 	}
 	_ = m.View(height, 30)
@@ -245,9 +245,9 @@ func TestPageUpPartialScrollMovesCursorByTheSameAmount(t *testing.T) {
 	const height = 10
 	m := scrollFollowModel(t)
 	_ = m.View(height, 30)
-	m.ScrollDown(5) // wheel: viewport to 5, cursor clamps onto the top row (C01)
+	m.ScrollDown(6) // wheel: viewport to 6, cursor clamps onto the top row (C01)
 	_ = m.View(height, 30)
-	if got, want := m.yOffset, 5; got != want {
+	if got, want := m.yOffset, 6; got != want {
 		t.Fatalf("setup: yOffset = %d, want %d", got, want)
 	}
 	if got := m.SelectedID(); got == "" {
@@ -258,14 +258,14 @@ func TestPageUpPartialScrollMovesCursorByTheSameAmount(t *testing.T) {
 		t.Fatalf("setup: screen row = %d, want 0", row)
 	}
 
-	m.PageUp(5) // only 5 rows of scroll are available
+	m.PageUp(6) // only 6 rows of scroll are available
 	_ = m.View(height, 30)
 
 	if got := m.yOffset; got != 0 {
 		t.Errorf("yOffset = %d, want 0", got)
 	}
 	if !m.IsThreadsSelected() {
-		t.Errorf("selected = %q, want the Threads row (five rows up, on the same screen row)", m.SelectedID())
+		t.Errorf("selected = %q, want the Threads row (six rows up, on the same screen row)", m.SelectedID())
 	}
 	if got := screenRow(&m); got != row {
 		t.Errorf("screen row = %d, want %d (unchanged)", got, row)
@@ -308,7 +308,7 @@ func TestPageDownSkipsNonNavigableRows(t *testing.T) {
 // steps by nav items so the key is not silently dropped.
 func TestPageDownBeforeFirstRenderStepsByNavItems(t *testing.T) {
 	m := scrollFollowModel(t)
-	m.PageDown(5) // Threads → Drafts → Activity → header → C01 → C02
+	m.PageDown(6) // Threads → Drafts → Activity → Find a DM → header → C01 → C02
 	if got := m.SelectedID(); got != "C02" {
 		t.Errorf("selected = %q, want C02", got)
 	}
@@ -355,7 +355,8 @@ func TestCursorFollowsScrollSkipsNonNavigableRows(t *testing.T) {
 // cannot tell whether pageBy landed on a navigable row or View() rescued
 // it. Here the cursor is asserted straight after the page call, before
 // any frame is rendered. The fixture's rows are: Threads, Drafts, Activity,
-// blank, "Alpha" header, A00..A14, blank (line 20), "Beta" header, B00..B14.
+// Find a DM, blank, "Alpha" header, A00..A14, blank (line 21), "Beta"
+// header, B00..B14.
 func TestPageBySkipsSeparatorBeforeRender(t *testing.T) {
 	const height = 10
 	newModel := func(t *testing.T) Model {
@@ -369,11 +370,11 @@ func TestPageBySkipsSeparatorBeforeRender(t *testing.T) {
 		}
 		m := New(items)
 		_ = m.View(height, 30)
-		if got := len(m.cacheRows); got != 37 {
-			t.Fatalf("setup: fixture has %d rows, want 37", got)
+		if got := len(m.cacheRows); got != 38 {
+			t.Fatalf("setup: fixture has %d rows, want 38", got)
 		}
-		if got := m.cacheRows[20].navIdx; got != -1 {
-			t.Fatalf("setup: line 20 navIdx = %d, want -1 (blank separator)", got)
+		if got := m.cacheRows[21].navIdx; got != -1 {
+			t.Fatalf("setup: line 21 navIdx = %d, want -1 (blank separator)", got)
 		}
 		return m
 	}
@@ -387,23 +388,23 @@ func TestPageBySkipsSeparatorBeforeRender(t *testing.T) {
 
 	t.Run("down lands on the header past the separator", func(t *testing.T) {
 		m := newModel(t)
-		// Threads → Drafts → Activity → Alpha header → A00 → A01 → A02 → A03
-		for range 7 {
+		// Threads → Drafts → Activity → Find a DM → Alpha header → A00 → A01 → A02 → A03
+		for range 8 {
 			m.MoveDown()
 		}
 		_ = m.View(height, 30)
 		if got := m.SelectedID(); got != "A03" {
-			t.Fatalf("setup: selected = %q, want A03 (line 8)", got)
+			t.Fatalf("setup: selected = %q, want A03 (line 9)", got)
 		}
 
-		m.PageDown(12) // line 8 + 12 = line 20, the blank separator
+		m.PageDown(12) // line 9 + 12 = line 21, the blank separator
 
 		if got := m.yOffset; got != 12 {
 			t.Errorf("yOffset = %d, want 12", got)
 		}
 		assertNavigable(t, &m)
-		if got := selectedLine(&m); got != 21 {
-			t.Errorf("selected line = %d, want 21 (the Beta header just below the separator)", got)
+		if got := selectedLine(&m); got != 22 {
+			t.Errorf("selected line = %d, want 22 (the Beta header just below the separator)", got)
 		}
 		if got := m.nav[m.cursor].header; got != "Beta" {
 			t.Errorf("cursor on %q, want the Beta section header", got)
@@ -413,27 +414,27 @@ func TestPageBySkipsSeparatorBeforeRender(t *testing.T) {
 	t.Run("up lands on the channel before the separator", func(t *testing.T) {
 		m := newModel(t)
 		m.ScrollDown(16)
-		_ = m.View(height, 30) // clamps the cursor to A11 at line 16
-		// A11 → A12 → A13 → A14 → Beta header → B00 → B01
-		for range 6 {
+		_ = m.View(height, 30) // clamps the cursor to A10 at line 16
+		// A10 → A11 → A12 → A13 → A14 → Beta header → B00 → B01
+		for range 7 {
 			m.MoveDown()
 		}
 		_ = m.View(height, 30)
 		if got := m.SelectedID(); got != "B01" {
-			t.Fatalf("setup: selected = %q, want B01 (line 23)", got)
+			t.Fatalf("setup: selected = %q, want B01 (line 24)", got)
 		}
 		if got := m.yOffset; got != 16 {
 			t.Fatalf("setup: yOffset = %d, want 16", got)
 		}
 
-		m.PageUp(3) // line 23 - 3 = line 20, the blank separator
+		m.PageUp(3) // line 24 - 3 = line 21, the blank separator
 
 		if got := m.yOffset; got != 13 {
 			t.Errorf("yOffset = %d, want 13", got)
 		}
 		assertNavigable(t, &m)
-		if got := selectedLine(&m); got != 19 {
-			t.Errorf("selected line = %d, want 19 (A14, just above the separator)", got)
+		if got := selectedLine(&m); got != 20 {
+			t.Errorf("selected line = %d, want 20 (A14, just above the separator)", got)
 		}
 		if got := m.SelectedID(); got != "A14" {
 			t.Errorf("selected = %q, want A14", got)

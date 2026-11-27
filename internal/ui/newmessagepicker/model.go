@@ -37,7 +37,11 @@ type User struct {
 	DisplayName string
 	Username    string
 	IsExternal  bool
-	Recency     int64
+	// Presence is "active", "away" or "dnd" when the workspace knows the
+	// person's presence. The finder row draws it; the new-message picker
+	// keeps its name-only rows.
+	Presence string
+	Recency  int64
 }
 
 // Result is returned by HandleKey when the user submits the picker.
@@ -57,6 +61,9 @@ type Model struct {
 	highlight     int                 // index into filtered
 	visible       bool
 	currentUserID string
+	// finder is the "Find a DM" variant: no recipient pills, a single
+	// result on Enter, presence and an initial avatar on each row.
+	finder bool
 }
 
 // New constructs an empty picker. SetUsers and (optionally)
@@ -78,6 +85,14 @@ func (m *Model) SetUsers(users []User) {
 func (m *Model) Users() []User {
 	return m.users
 }
+
+// SetFinder selects the "Find a DM" variant. The next Open uses the
+// finder title, single-result submit, presence rows and spaces in the
+// query. Ctrl+N sets it back to false before opening.
+func (m *Model) SetFinder(on bool) { m.finder = on }
+
+// IsFinder reports whether the picker is in the Find a DM variant.
+func (m *Model) IsFinder() bool { return m.finder }
 
 // SetCurrentUserID configures which user ID represents "self" so the
 // picker can hide it from the list (a user cannot start a DM with
@@ -177,7 +192,21 @@ func (m *Model) HandleKey(keyStr string) *Result {
 			m.highlight--
 		}
 		return nil
-	case " ", "tab":
+	case " ":
+		if m.finder {
+			m.query += " "
+			m.highlight = 0
+			m.filter()
+			return nil
+		}
+		m.toggleHighlightedSelection()
+		return nil
+	case "tab":
+		if m.finder {
+			// The scope chip will use Tab when scopes land; for now it
+			// is a no-op rather than adding a recipient pill.
+			return nil
+		}
 		m.toggleHighlightedSelection()
 		return nil
 	case "backspace":
