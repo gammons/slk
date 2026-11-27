@@ -1301,3 +1301,44 @@ func reactionFrameHits(m *Model) []entrylist.FrameHit {
 	}
 	return out
 }
+
+// A refetch that returns the replies already on screen keeps their
+// rendered cache (#396). A changed reply, or another thread, rebuilds it.
+func TestSetThread_SameRepliesKeepRenderCache(t *testing.T) {
+	m := New()
+	parent := messages.MessageItem{TS: "1700000001.000000", UserName: "alice", Text: "parent message"}
+	replies := func() []messages.MessageItem {
+		return []messages.MessageItem{
+			{TS: "1700000002.000000", UserName: "bob", Text: "reply 1", Reactions: []messages.ReactionItem{{Emoji: "tada", Count: 1, UserIDs: []string{"U1"}}}},
+			{TS: "1700000003.000000", UserName: "charlie", Text: "reply 2"},
+		}
+	}
+	m.SetThread(parent, replies(), "C123", "1700000001.000000")
+	m.View(30, 80)
+	if m.cache == nil {
+		t.Fatal("View did not build the reply cache")
+	}
+
+	m.SetThread(parent, replies(), "C123", "1700000001.000000")
+	if m.cache == nil {
+		t.Error("same replies dropped the reply cache")
+	}
+	if got := m.View(30, 80); !strings.Contains(got, "reply 2") {
+		t.Errorf("view after a same-replies SetThread lost a reply:\n%s", got)
+	}
+
+	changed := replies()
+	changed[1].Text = "reply 2, edited"
+	m.SetThread(parent, changed, "C123", "1700000001.000000")
+	if m.cache != nil {
+		t.Error("a changed reply kept the stale reply cache")
+	}
+	if got := m.View(30, 80); !strings.Contains(got, "reply 2, edited") {
+		t.Errorf("view does not show the edited reply:\n%s", got)
+	}
+
+	m.SetThread(parent, changed, "C999", "1700000001.000000")
+	if m.cache != nil {
+		t.Error("another channel's thread kept the reply cache")
+	}
+}
