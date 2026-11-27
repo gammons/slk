@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -264,7 +265,8 @@ func (m *Model) HandleAvatarReady(userID string) {
 // receiving a refresh of the current one), the unread boundary is cleared
 // so a fresh boundary can be set by the caller via SetLastReadTS.
 func (m *Model) SetThread(parent messages.MessageItem, replies []messages.MessageItem, channelID, threadTS string) {
-	if channelID != m.channelID || threadTS != m.threadTS {
+	sameThread := channelID == m.channelID && threadTS == m.threadTS
+	if !sameThread {
 		m.unreadBoundaryTS = ""
 	}
 	m.ClearSelection()
@@ -273,6 +275,14 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	m.channelID = channelID
 	m.threadTS = threadTS
 	replies, _, _ = messages.Visible(m.hide, replies)
+	// The fetch that follows a cached open often returns the replies
+	// already on screen. Their rendered cache is kept then, since a
+	// rebuild of a long thread blocks the UI for hundreds of ms. The
+	// parent is drawn every frame, so only the replies are compared. Any
+	// difference rebuilds everything, as before. So does active reaction
+	// navigation, whose highlight is in the cached rows of the reply that
+	// was selected, while the selection moves to the newest reply below.
+	keepCache := sameThread && !m.nav.Active && reflect.DeepEqual(replies, m.replies)
 	m.replies = replies
 	// Per the doc comment, the cursor starts at the bottom (newest reply)
 	// so a long thread opens scrolled to the latest activity rather than
@@ -288,6 +298,12 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	// previously-viewed thread's snapped selection skips the snap and leaves
 	// the viewport scrolled to the top. Mirrors messages.Model.SetMessages.
 	m.list.ResetSnap()
+	if keepCache {
+		m.layoutValid = false
+		m.chromeCacheValid = false
+		m.dirty()
+		return
+	}
 	m.InvalidateCache()
 }
 
