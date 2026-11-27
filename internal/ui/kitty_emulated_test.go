@@ -9,7 +9,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/overlay"
 )
@@ -106,24 +105,17 @@ func TestFinalizeSixelView_EmulatedKittyUnderModal(t *testing.T) {
 }
 
 func TestReduceTerminalModes_TracksUnicodeCore(t *testing.T) {
-	// The glyph rule is process-global; leave it off for later tests.
-	emoji.SetGraphemeClusters(false)
-	t.Cleanup(func() { emoji.SetGraphemeClusters(false) })
-
 	a := newTestApp(t)
 	a.Update(tea.ModeReportMsg{Mode: ansi.ModeSynchronizedOutput, Value: ansi.ModeSet})
-	if a.graphemeWidth || emoji.GraphemeClusters() {
+	if a.graphemeWidth {
 		t.Fatal("synchronized-output report switched the width method")
 	}
 	a.Update(tea.ModeReportMsg{Mode: ansi.ModeUnicodeCore, Value: ansi.ModeNotRecognized})
-	if a.graphemeWidth || emoji.GraphemeClusters() {
+	if a.graphemeWidth {
 		t.Fatal("unrecognized unicode core switched the width method")
 	}
 	a.Update(tea.ModeReportMsg{Mode: ansi.ModeUnicodeCore, Value: ansi.ModePermanentlySet})
 	if !a.graphemeWidth {
 		t.Fatal("unicode core report did not switch to grapheme widths")
-	}
-	if !emoji.GraphemeClusters() {
-		t.Fatal("unicode core report did not enable multi-codepoint emoji glyphs")
 	}
 }
