@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"sync"
@@ -66,6 +67,9 @@ type userResolver struct {
 	// bot_id. botInfo holds the answers: botID -> *slack.Bot.
 	bots    singleflight.Group
 	botInfo sync.Map
+	// botIcon returns the icon a bot author's messages carried
+	// ((*slackclient.Client).BotIcon), or "" when none was seen.
+	botIcon func(authorID string) string
 	// Successful lookups queue peer IDs for the serialized event owner.
 	// Coalesce repeat resolutions without blocking background or synchronous
 	// callers; neither may mutate conversation slices here.
@@ -111,6 +115,7 @@ func newUserResolver(
 	return &userResolver{
 		teamID:       teamID,
 		client:       client,
+		botIcon:      client.BotIcon,
 		db:           db,
 		avatars:      avatars,
 		send:         send,
@@ -521,8 +526,10 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 // so the resolved name + avatar attach to messages whose UserID was set
 // to that author ID, and two senders of one webhook stay apart. username
 // is the name carried on the message (used as a fallback / immediate
-// value); bots.info supplies the icon (and a name if the message had
-// none). Mirrors Request: inflight dedup, cache-skip, async fetch,
+// value). The icon is the one the author's messages carried (botIcon),
+// else the bots.info icon, and bots.info also supplies a name if the
+// message had none. A cached row is kept unless the messages now carry
+// another icon. Mirrors Request: inflight dedup, cache-skip, async fetch,
 // Preload + UpsertUser + UserResolvedMsg (which AvatarReadyMsg follows).
 func (r *userResolver) RequestBot(botID, username string) {
 	if r == nil || botID == "" {
@@ -532,25 +539,30 @@ func (r *userResolver) RequestBot(botID, username string) {
 	if _, exists := r.inflight.LoadOrStore(authorID, struct{}{}); exists {
 		return
 	}
-	if _, err := r.db.GetUser(authorID); err == nil {
+	iconURL := ""
+	if r.botIcon != nil {
+		iconURL = r.botIcon(authorID)
+	}
+	if u, err := r.db.GetUser(authorID); err == nil && (iconURL == "" || u.AvatarURL == iconURL) {
 		r.inflight.Delete(authorID)
 		return
 	}
 	go func() {
 		defer r.inflight.Delete(authorID)
-		bot, err := r.botInfoFor(botID)
-		if err != nil {
-			debuglog.Cache("userResolver: GetBotInfo team=%s bot=%s err=%v", r.teamID, botID, err)
-			return
-		}
 		name := username
-		if name == "" {
-			name = bot.Name
+		if name == "" || iconURL == "" {
+			bot, err := r.botInfoFor(botID)
+			if err != nil {
+				debuglog.Cache("userResolver: GetBotInfo team=%s bot=%s err=%v", r.teamID, botID, err)
+				if iconURL == "" {
+					return
+				}
+			} else {
+				name = cmp.Or(name, bot.Name)
+				iconURL = cmp.Or(iconURL, bestBotIcon(bot.Icons))
+			}
 		}
-		if name == "" {
-			name = botID
-		}
-		iconURL := bestBotIcon(bot.Icons)
+		name = cmp.Or(name, botID)
 		r.avatars.Preload(authorID, iconURL)
 		_ = r.db.UpsertUser(cache.User{
 			ID:          authorID,

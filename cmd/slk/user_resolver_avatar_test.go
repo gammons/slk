@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
@@ -290,5 +292,52 @@ func TestRequestAvatar_DoesNotBlockTheCaller(t *testing.T) {
 	// DB again, and none can race t.TempDir's RemoveAll.
 	for i := 0; i < requests; i++ {
 		<-arrived
+	}
+}
+
+// A webhook sender's own icon, from its messages, is its avatar ahead of
+// the bots.info icon, and replaces the icon of a row cached before it was
+// seen. With the username and icon known, bots.info is not called.
+func TestRequestBot_MessageIcon(t *testing.T) {
+	icon := avatarPNGServer(t).URL + "/alice.png"
+	var hits atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"bot":{"id":"B1","name":"webhook","icons":{"image_72":"https://example.com/bot.png"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	db := newTestDB(t)
+	if err := db.UpsertUser(cache.User{ID: "B1/Alice", WorkspaceID: "T1", Name: "Alice", DisplayName: "Alice", AvatarURL: "https://example.com/bot.png", IsBot: true}); err != nil {
+		t.Fatal(err)
+	}
+	avc, ready := newReadyAvatarCache(t)
+	watch := newResolvedWatch(1, nil)
+	r := newUserResolver("T1", newTestClient(t, srv), db, avc, watch.send, nil, nil)
+	r.botIcon = func(id string) string {
+		if id == "B1/Alice" {
+			return icon
+		}
+		return ""
+	}
+	r.RequestBot("B1", "Alice")
+	select {
+	case <-watch.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no UserResolvedMsg for B1/Alice")
+	}
+	select {
+	case got := <-ready:
+		if got != "B1/Alice" {
+			t.Fatalf("avatar ready for %q, want B1/Alice", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("avatar for B1/Alice never loaded")
+	}
+	if got := storedAvatarURL(t, db, "B1/Alice"); got != icon {
+		t.Errorf("avatar_url = %q, want the message icon %q", got, icon)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("bots.info called %d times, want 0", n)
 	}
 }
