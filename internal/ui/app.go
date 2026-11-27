@@ -3595,6 +3595,7 @@ func (a *App) SetEmojiContext(ctx messages.EmojiContext) {
 	a.threadPanel.SetEmojiContext(ctx)
 	a.sidebar.SetEmojiContext(ctx)
 	a.channelFinder.SetEmojiContext(ctx)
+	a.activityView.SetEmojiContext(ctx)
 	a.presenceMenu.SetEmojiContext(ctx)
 	a.reactionPicker.SetEmojiContext(reactionpicker.EmojiContext{
 		PlaceCtx: ctx.PlaceCtx,
@@ -3998,6 +3999,7 @@ func (a *App) SetCustomEmoji(customs map[string]string) {
 	a.threadPanel.SetEmojiCustoms(customs)
 	a.sidebar.SetEmojiCustoms(customs)
 	a.channelFinder.SetEmojiCustoms(customs)
+	a.activityView.SetEmojiCustoms(customs)
 	a.presenceMenu.SetEmojiCustoms(customs)
 	a.reactionPicker.SetEmojiCustoms(customs)
 	// Compose autocomplete dropdowns (main + thread) also need the

@@ -48,8 +48,11 @@
 package ui
 
 import (
+	"bytes"
+
 	"charm.land/lipgloss/v2"
 
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -216,6 +219,15 @@ func (a *App) renderActivityViewPanel(msgWidth, msgBorder, contentHeight int, ms
 		msgContentHeight = 3
 	}
 	avView := a.activityView.View(msgContentHeight, msgWidth-2)
+	if flushes := a.activityView.Flushes(); len(flushes) > 0 {
+		var buf bytes.Buffer
+		for _, fl := range flushes {
+			_ = fl(&buf)
+		}
+		if buf.Len() > 0 {
+			_, _ = imgpkg.KittyOutput.Write(buf.Bytes())
+		}
+	}
 	avView = messages.ReapplyBgAfterResets(avView, messages.BgANSI())
 	out := exactSize(
 		msgBorderStyle.Render(avView),

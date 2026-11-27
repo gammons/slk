@@ -13,6 +13,7 @@
 package activityview
 
 import (
+	"io"
 	"maps"
 	"slices"
 	"strconv"
@@ -89,6 +90,8 @@ type Model struct {
 	channelNames map[string]string
 	channelTypes map[string]string
 	selfUserID   string
+	emoji        messages.EmojiContext
+	flushes      []func(io.Writer) error
 
 	// bodies holds hydrated message text/author for each item ref,
 	// keyed by core.ActivityMsgKey(channelID, ts). Filled by SetBodies
@@ -175,6 +178,35 @@ func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
 	m.dirty()
 }
+
+// SetEmojiContext gives the cards the workspace's custom emoji map and
+// image placement context, so a body shortcode renders as the same
+// glyph or image it does in the message pane. The image fetches land
+// later and are collected as EmojiFlushes for the App to upload.
+func (m *Model) SetEmojiContext(ctx messages.EmojiContext) {
+	m.emoji = ctx
+	m.flushes = nil
+	m.dirty()
+}
+
+// SetEmojiCustoms updates only the workspace custom emoji map, the same
+// partial update the panes take when emoji.list lands after the initial
+// context.
+func (m *Model) SetEmojiCustoms(customs map[string]string) {
+	m.emoji.Customs = customs
+	m.dirty()
+}
+
+// HandleEmojiImageReady invalidates the rendered cards when an emoji
+// image fetch settles, so the next View places the warm image. The
+// emoji context itself is unchanged: replacing it with the App's saved
+// context here would drop the workspace customs map that arrived after
+// that context was captured.
+func (m *Model) HandleEmojiImageReady(string) { m.dirty() }
+
+// Flushes returns the kitty uploads for the images the last View
+// placed. The App writes them, like the message pane's flushes.
+func (m *Model) Flushes() []func(io.Writer) error { return m.flushes }
 
 // PatchUserName records a display name resolved after SetUserNames and
 // bumps the version when a card shows that user (as actor, hydrated
@@ -491,6 +523,7 @@ func (m *Model) View(height, width int) string {
 	// clicked. Clear before the empty-list return too, or a refresh that
 	// empties the feed leaves the previous cards' links live.
 	m.linkHits = m.linkHits[:0]
+	m.flushes = m.flushes[:0]
 	if width < 1 {
 		width = 1
 	}
@@ -664,7 +697,14 @@ func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (stri
 	// Render the body the way the Threads view and message pane do, then
 	// fold it onto one line: a card has exactly cardContentLines lines,
 	// so a newline in the message would desync the windowing/click math.
-	opts := messages.RenderSlackMarkdownOpts{UserNames: m.userNames, ChannelNames: m.channelNames}
+	opts := messages.RenderSlackMarkdownOpts{
+		UserNames:    m.userNames,
+		ChannelNames: m.channelNames,
+		PlaceCtx:     m.emoji.PlaceCtx,
+		EmojiCells:   m.emoji.Cells,
+		Customs:      m.emoji.Customs,
+		EmojiFlushes: &m.flushes,
+	}
 	preview := ""
 	if body.Text != "" {
 		preview = messages.RenderSlackMarkdownWith(body.Text, opts)
