@@ -265,6 +265,8 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 			pxW := target.X * cw
 			pxH := target.Y * ch
 			resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
+			// Kitty carries alpha itself; keep it so emoji margins show
+			// the row's own background (selection tint, sidebar).
 			draw.BiLinear.Scale(resized, resized.Bounds(), src, src.Bounds(), draw.Over, nil)
 			var pngBuf bytes.Buffer
 			if err := imgpng.Encode(&pngBuf, resized); err == nil {

@@ -98,7 +98,8 @@ func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {
 	pxW := target.X * cw
 	pxH := target.Y * ch
 	resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
-	draw.BiLinear.Scale(resized, resized.Bounds(), img, img.Bounds(), draw.Over, nil)
+	fillEncodeBackground(resized)
+	draw.CatmullRom.Scale(resized, resized.Bounds(), img, img.Bounds(), draw.Over, nil)
 
 	var sx bytes.Buffer
 	enc := gosixel.NewEncoder(&sx)

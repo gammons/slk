@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 )
@@ -46,6 +47,7 @@ type pendingThemeSave struct {
 func (a *App) applyTheme(name string) {
 	a.themeName = name
 	styles.Apply(name, a.themeOverrides)
+	imgpkg.SetEncodeBackground(styles.Background)
 	a.invalidateAllWinModelCaches()
 	a.threadPanel.InvalidateCache()
 	a.sidebar.InvalidateCache()
