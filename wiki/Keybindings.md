@@ -55,7 +55,7 @@
 | `:activity` | Normal | Open the Activity view |
 | `u` | Normal (activity) | Toggle the Activity view's unread-only filter |
 | `U` | Normal (activity) | Toggle the selected Activity item read/unread |
-| `Ctrl+t` / `Ctrl+p` | Any | Fuzzy channel finder |
+| `Ctrl+t` / `Ctrl+p` | Normal | Fuzzy channel finder |
 | `P` | Normal | Open a pasted Slack message link: a one-line dialog. Paste with the terminal or `Ctrl+V`; Enter opens an archive permalink (including `?thread_ts=` and an Enterprise Grid alias), Esc cancels |
 | `:ws` | Normal | Workspace picker (`[general] workspace_picker_vim_keys = true` opens it with `j`/`k` to move and `/` to filter) |
 | `Ctrl+w s` / `:sp` | Normal | Split the focused window into two, one above the other |
@@ -65,7 +65,7 @@
 | `Ctrl+w q` / `:q` | Normal | Close the focused window (not the last one) |
 | `Ctrl+w o` / `:only` (`:on`) | Normal | Close every other window |
 | `1`–`9` | Normal | Jump to workspace N |
-| `r` | Normal (message) | Open reaction picker |
+| `r` | Normal (message) | Open reaction picker (`↑`/`↓` or `Ctrl+n`/`Ctrl+p` to move) |
 | `R` | Normal (message) | Quick-toggle existing reactions |
 | `E` | Normal (message) | Edit your own message |
 | `D` | Normal (message) | Delete your own message (with confirmation) |
