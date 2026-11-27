@@ -37,8 +37,11 @@ func PlaceSixel(frame *entrylist.Frame, offsets []int, yOffset, height int, imag
 			if fullyVisible && (blocked == nil || !blocked(windowRow, sx.height)) {
 				if windowRow >= 0 && windowRow < len(frame.Rows) {
 					margin := ""
-					if sx.margin && marginSGR != nil {
-						margin = marginSGR(v.Index)
+					if sx.margin {
+						margin = sx.marginSGR
+						if margin == "" && marginSGR != nil {
+							margin = marginSGR(v.Index)
+						}
 					}
 					paints = append(paints, imgpkg.SixelPaint{
 						Key:       imgpkg.PlacementKey(sx.key, sx.bytes, sx.width, sx.height),

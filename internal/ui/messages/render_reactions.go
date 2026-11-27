@@ -22,13 +22,19 @@ type pillSpec struct {
 	emoji    string
 }
 
+// pillMarginSGR is the background the cells right of and below a pill's
+// emoji image are repainted with.
+func pillMarginSGR(style lipgloss.Style) string {
+	return bgANSIFor(style.GetBackground())
+}
+
 // renderReactionPills renders msg's reaction pills, wrapped to contentWidth.
 // It returns the block (with a leading "\n", empty when there are no
 // reactions), its row count and the per-pill hit specs, and appends any
 // image-emoji flushes to out.ReactionFlushes. Shared by the chat-message and
 // system-notice branches of RenderMessage so both draw (and hit-test)
 // reactions the same way.
-func renderReactionPills(msg MessageItem, rc *RenderContext, opt RenderOptions, contentWidth int, out *RenderedMessage) (block string, lineCount int, specs []pillSpec) {
+func renderReactionPills(msg MessageItem, rc *RenderContext, opt RenderOptions, contentWidth int, out *RenderedMessage, sixelSink *emojiutil.InlineSixel) (block string, lineCount int, specs []pillSpec) {
 	if len(msg.Reactions) == 0 {
 		return "", 0, nil
 	}
@@ -50,6 +56,14 @@ func renderReactionPills(msg MessageItem, rc *RenderContext, opt RenderOptions, 
 		pillCells = 2
 	}
 	for i, r := range msg.Reactions {
+		var style lipgloss.Style
+		if opt.IsSelected && rc.Nav.Active && i == rc.Nav.Index {
+			style = styles.ReactionPillSelected
+		} else if r.HasReacted {
+			style = styles.ReactionPillOwn
+		} else {
+			style = styles.ReactionPillOther
+		}
 		// Image path: pass r.Emoji directly (including any skin-tone
 		// suffix) -- URLForShortcode composes the per-tone CDN URL natively.
 		//
@@ -66,6 +80,13 @@ func renderReactionPills(msg MessageItem, rc *RenderContext, opt RenderOptions, 
 				}
 			}
 		}
+		if emojiStr == "" && sixelSink != nil {
+			if url, ok := emojiutil.URLForShortcode(r.Emoji, rc.Emoji.Customs); ok {
+				if marker, ok := sixelSink.PlaceWithMargin(url, pillMarginSGR(style)); ok {
+					emojiStr = marker
+				}
+			}
+		}
 		if emojiStr == "" {
 			legacyName := emojiutil.StripSkinTone(r.Emoji)
 			resolved := emojiutil.Sprint(":" + legacyName + ":")
@@ -74,14 +95,6 @@ func renderReactionPills(msg MessageItem, rc *RenderContext, opt RenderOptions, 
 			} else {
 				emojiStr = ":" + legacyName + ":"
 			}
-		}
-		var style lipgloss.Style
-		if opt.IsSelected && rc.Nav.Active && i == rc.Nav.Index {
-			style = styles.ReactionPillSelected
-		} else if r.HasReacted {
-			style = styles.ReactionPillOwn
-		} else {
-			style = styles.ReactionPillOther
 		}
 		pillText := ReactionPillText(emojiStr, r.Count, style, placedFlush != nil)
 		pills = append(pills, style.Render(pillText))

@@ -170,5 +170,6 @@ func addInlineSixel(row, idx, col, cells int, images []emojiutil.InlineImage, ds
 		row: row, col: col,
 		key: img.Key, bytes: img.Bytes, fallback: img.Fallback,
 		height: 1, width: cells,
+		margin: img.MarginSGR != "", marginSGR: img.MarginSGR,
 	})
 }

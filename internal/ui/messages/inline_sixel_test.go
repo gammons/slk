@@ -168,6 +168,39 @@ func TestRenderMessage_InlineEmojiPlacement(t *testing.T) {
 	}
 }
 
+// A custom emoji reaction pill uses the same inline sixel sink as the
+// body, so it does not fall back to literal :shortcode: text.
+func TestRenderMessage_ReactionCustomEmojiSixel(t *testing.T) {
+	enableInlineSixel(t)
+	const url = "https://emoji.slack-edge.com/T1/thanks-ty/abc.gif"
+	f := warmInlineFetcher(url)
+	renderer := imgrender.NewRenderer()
+	renderer.SetContext(imgrender.ImageContext{Protocol: imgpkg.ProtoSixel})
+	rc := &RenderContext{
+		Emoji: EmojiContext{
+			PlaceCtx: emojiutil.PlaceContext{Fetcher: f},
+			Cells:    2,
+			Customs:  map[string]string{"thanks-ty": url},
+		},
+		Images: renderer,
+	}
+	msg := MessageItem{
+		TS: "1.0", UserID: "U1", UserName: "alice", Text: "hi", Timestamp: "11:08 AM",
+		Reactions: []ReactionItem{{Emoji: "thanks-ty", Count: 1}},
+	}
+	out := RenderMessage(msg, 60, rc, RenderOptions{SixelRows: true})
+	plain := ansi.Strip(out.Content)
+	if strings.Contains(plain, ":thanks-ty:") {
+		t.Errorf("reaction shortcode leaked into the frame: %q", plain)
+	}
+	if len(out.SixelRows) != 1 {
+		t.Fatalf("SixelRows = %d, want the reaction emoji image", len(out.SixelRows))
+	}
+	if !out.SixelRows[0].margin || out.SixelRows[0].marginSGR == "" {
+		t.Errorf("reaction image = %+v, want a pill background margin", out.SixelRows[0])
+	}
+}
+
 // A standard emoji with a Slack tone suffix keeps the old glyph
 // fallback: strip the tone before resolving the glyph.
 func TestRenderEmojiWith_SixelPathStripsStandardTone(t *testing.T) {

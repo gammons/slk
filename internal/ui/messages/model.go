@@ -131,14 +131,15 @@ func withTrail(rows []string, e *entrylist.Entry) []string {
 // fills it; a pane carries it opaque in EntryPayload and hands it to
 // PlaceSixel.
 type SixelImage struct {
-	key      string // stable image cache key; empty -> payload-hash identity
-	bytes    []byte
-	fallback []string // halfblock-equivalent text for partial-visibility frames
-	height   int      // image height in rows
-	width    int      // image width in cells; the erase footprint
-	row      int      // entry row of the image's top-left cell
-	col      int      // display column within the entry's rows where the image starts
-	margin   bool     // avatar: the cell right of and below the image is blank gutter
+	key       string // stable image cache key; empty -> payload-hash identity
+	bytes     []byte
+	fallback  []string // halfblock-equivalent text for partial-visibility frames
+	height    int      // image height in rows
+	width     int      // image width in cells; the erase footprint
+	row       int      // entry row of the image's top-left cell
+	col       int      // display column within the entry's rows where the image starts
+	margin    bool     // avatar or reaction pill: neighbours are blank
+	marginSGR string   // explicit margin background; empty uses the row's
 }
 
 // OpenImagePreviewMsg requests opening the full-screen preview overlay
