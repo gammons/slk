@@ -259,6 +259,7 @@ func run() error {
 	// which avoids a flash of the wrong theme without needing to know
 	// the active TeamID up front (workspaces connect in goroutines).
 	styles.Apply(cfg.Appearance.Theme, cfg.Theme)
+	imgpkg.SetEncodeBackground(styles.Background)
 
 	styles.ApplyCompact(cfg.Appearance.Compact)
 

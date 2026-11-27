@@ -276,7 +276,7 @@ func (f *Fetcher) Prerendered(key string, cellTarget image.Point, proto Protocol
 }
 
 func prerenderKey(key string, cellTarget image.Point, proto Protocol) string {
-	return fmt.Sprintf("%s|%dx%d|%d", key, cellTarget.X, cellTarget.Y, proto)
+	return fmt.Sprintf("%s|%dx%d|%d|bg%d", key, cellTarget.X, cellTarget.Y, proto, EncodeBackgroundVersion())
 }
 
 // Fetch returns the decoded image, downloading and caching if needed.

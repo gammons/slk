@@ -85,6 +85,10 @@ type Cache struct {
 	// worker must not re-store renders encoded at the old size after
 	// the caches were cleared.
 	gen atomic.Uint64
+	// bgVersion is the image encode background the cached renders were
+	// composited against. A theme switch bumps it; the next access
+	// drops the renders so they are re-encoded against the new colour.
+	bgVersion uint64
 
 	// inflight tracks userIDs whose Preload is currently in-flight (or
 	// already rendered). Acts as a dedup gate so a hot render path
@@ -188,6 +192,28 @@ func (c *Cache) SetOnReady(fn func(userID string)) {
 // the disk cache serves without the network. Preloads already running
 // when Invalidate lands drop their results instead of re-storing
 // renders encoded at the old size.
+// syncEncodeBackground drops every render when the theme's encode
+// background changed, so transparent avatar margins are re-composited
+// against the new colour instead of the old one.
+func (c *Cache) syncEncodeBackground() {
+	v := imgpkg.EncodeBackgroundVersion()
+	c.mu.Lock()
+	if c.bgVersion == v {
+		c.mu.Unlock()
+		return
+	}
+	c.bgVersion = v
+	c.gen.Add(1)
+	c.renders = make(map[string]string)
+	c.small = make(map[string]string)
+	c.sixel = make(map[string]sixelAvatar)
+	c.mu.Unlock()
+	c.inflight.Range(func(key, _ any) bool {
+		c.inflight.Delete(key)
+		return true
+	})
+}
+
 func (c *Cache) Invalidate() {
 	c.gen.Add(1)
 	c.mu.Lock()
@@ -213,6 +239,7 @@ func (c *Cache) Preload(userID, avatarURL string) {
 	if avatarURL == "" {
 		return
 	}
+	c.syncEncodeBackground()
 	if _, loaded := c.inflight.LoadOrStore(userID, struct{}{}); loaded {
 		return
 	}
@@ -243,6 +270,7 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 	if avatarURL == "" {
 		return
 	}
+	c.syncEncodeBackground()
 	gen := c.gen.Load()
 	// Source size differs by protocol:
 	//   - half-block: (AvatarCols, AvatarRows*2) gives the renderer
@@ -325,6 +353,7 @@ func avatarKey(userID string) string {
 
 // Get returns the rendered avatar string, or empty if not cached.
 func (c *Cache) Get(userID string) string {
+	c.syncEncodeBackground()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.renders[userID]
@@ -336,6 +365,7 @@ func (c *Cache) Get(userID string) string {
 // which a pane draws while the sixel image cannot be (a pane edge cuts
 // it).
 func (c *Cache) GetSixel(userID string) (key string, bytes []byte, ok bool) {
+	c.syncEncodeBackground()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	sx, ok := c.sixel[userID]
@@ -362,6 +392,7 @@ func encodeSixel(userID string, img image.Image) sixelAvatar {
 // empty if the avatar is not loaded yet or not on kitty (a 2×1
 // half-block avatar is unreadable).
 func (c *Cache) GetSmall(userID string) string {
+	c.syncEncodeBackground()
 	c.mu.RLock()
 	small, loaded := c.small[userID], c.renders[userID] != ""
 	c.mu.RUnlock()

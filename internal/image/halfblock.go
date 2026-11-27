@@ -24,6 +24,7 @@ func (HalfBlockRenderer) Render(img image.Image, target image.Point) Render {
 		target.X, target.Y, img.Bounds())
 	pxW, pxH := target.X, target.Y*2
 	resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
+	fillEncodeBackground(resized)
 	draw.BiLinear.Scale(resized, resized.Bounds(), img, img.Bounds(), draw.Over, nil)
 
 	lines := make([]string, target.Y)

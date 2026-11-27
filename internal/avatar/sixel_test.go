@@ -34,6 +34,26 @@ func TestPreload_SixelEncodesAvatar(t *testing.T) {
 	}
 }
 
+// A theme switch changes the encode background; cached renders keyed
+// only by user must be dropped and re-composited.
+func TestCacheRebuildsAfterEncodeBackgroundChange(t *testing.T) {
+	c, url, done := testCache(t)
+	defer done()
+	c.PreloadSync("U1", url)
+	if c.Get("U1") == "" {
+		t.Fatal("precondition: avatar not rendered")
+	}
+
+	imgpkg.SetEncodeBackground(imgcolor.RGBA{R: 9, G: 9, B: 9, A: 255})
+	if got := c.Get("U1"); got != "" {
+		t.Fatal("cached avatar survived a background change")
+	}
+	c.PreloadSync("U1", url)
+	if c.Get("U1") == "" {
+		t.Fatal("avatar did not re-render for the new background")
+	}
+}
+
 // Off sixel mode, and before an avatar loads, there is no sixel image.
 func TestGetSixel_NoneOffSixelOrUnloaded(t *testing.T) {
 	c, url, done := testCache(t)
