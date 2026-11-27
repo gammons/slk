@@ -59,6 +59,13 @@ type panelLayout struct {
 	// mode, the click equivalent of `i`.
 	msgComposeTop    int
 	threadComposeTop int
+	// Composer popup geometry for the frame, in the same pane rows:
+	// top is the popup's first border row, rows its rendered height.
+	// Zero rows means no popup.
+	msgPopupTop     int
+	msgPopupRows    int
+	threadPopupTop  int
+	threadPopupRows int
 	// focusedWinRect is the focused split window's rect this frame, in
 	// messages-region-local coordinates, set by the window renderer and
 	// reset with the compose regions. Zero (W == 0) when no split is
@@ -72,8 +79,24 @@ type panelLayout struct {
 // pane) or a closed split leaves no stale region behind.
 func (l *panelLayout) ResetComposeRegions() {
 	l.msgComposeTop, l.threadComposeTop = 0, 0
+	l.msgPopupTop, l.msgPopupRows = 0, 0
+	l.threadPopupTop, l.threadPopupRows = 0, 0
 	l.focusedWinRect = wintree.Rect{}
 }
+
+// SetMsgPopup records the composer popup's first row and height for
+// the channel pane, in pane rows.
+func (l *panelLayout) SetMsgPopup(top, rows int) { l.msgPopupTop, l.msgPopupRows = top, rows }
+
+// SetThreadPopup records the composer popup's first row and height for
+// the thread pane.
+func (l *panelLayout) SetThreadPopup(top, rows int) { l.threadPopupTop, l.threadPopupRows = top, rows }
+
+// MsgPopup returns the channel composer popup's first row and height.
+func (l *panelLayout) MsgPopup() (top, rows int) { return l.msgPopupTop, l.msgPopupRows }
+
+// ThreadPopup returns the thread composer popup's first row and height.
+func (l *panelLayout) ThreadPopup() (top, rows int) { return l.threadPopupTop, l.threadPopupRows }
 
 // SetMsgComposeTop records where the channel pane's compose region
 // begins this frame. row is in pane rows, 1-based past the top border.

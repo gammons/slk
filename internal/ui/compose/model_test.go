@@ -495,6 +495,38 @@ func TestEmojiTrigger_OpensAfterColonAndTwoChars(t *testing.T) {
 	}
 }
 
+func TestClickEmojiRowInserts(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+	m = typeChars(t, m, ":ro")
+	if !m.IsEmojiActive() || m.EmojiPopupRows() == 0 {
+		t.Fatal("precondition: emoji popup open")
+	}
+	if !m.ClickEmojiRow(0) {
+		t.Fatal("ClickEmojiRow(0) = false")
+	}
+	if got := m.Value(); !strings.Contains(got, ":rock: ") {
+		t.Errorf("value = %q, want the clicked :rock:", got)
+	}
+	if m.IsEmojiActive() {
+		t.Error("picker stayed open after a click")
+	}
+}
+
+func TestScrollEmojiPopupMovesHighlight(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+	m = typeChars(t, m, ":ro")
+	if !m.ScrollEmojiPopup(false) {
+		t.Fatal("ScrollEmojiPopup(false) = false")
+	}
+	if got := m.emojiPicker.Selected(); got != 1 {
+		t.Errorf("selected = %d, want 1 after one wheel notch", got)
+	}
+}
+
 func TestEmojiTrigger_RequiresWordBoundary(t *testing.T) {
 	m := New("general")
 	m.SetEmojiEntries(sampleEmojiEntries())

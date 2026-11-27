@@ -153,6 +153,15 @@ func Place(ctx PlaceContext, url string, cells int) (string, func(io.Writer) err
 		}
 	}
 
+	// Sixel and plain terminals cannot draw kitty placeholders. Their
+	// prerender carries the half-block fallback, which is a real
+	// thumbnail the selector can put inline in a text row.
+	if r, ok := ctx.Fetcher.Prerendered(key, target, imgpkg.ProtoSixel); ok {
+		if len(r.Fallback) > 0 && r.Fallback[0] != "" {
+			return r.Fallback[0], nil, true
+		}
+	}
+
 	// Cold path: kick off an async fetch (deduplicated per-URL across
 	// all concurrent Place calls), return a cells-wide space
 	// reservation. Width math reports the same value (cells) for both

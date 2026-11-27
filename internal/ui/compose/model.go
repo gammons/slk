@@ -1851,6 +1851,46 @@ func (m *Model) SetEmojiCustoms(customs map[string]string) {
 // IsEmojiActive returns whether the emoji picker is currently showing.
 func (m Model) IsEmojiActive() bool { return m.emojiActive }
 
+// EmojiPopupRows returns how many result rows the open emoji popup
+// draws. 0 when it is closed.
+func (m Model) EmojiPopupRows() int {
+	if !m.emojiActive {
+		return 0
+	}
+	return len(m.emojiPicker.Filtered())
+}
+
+// ClickEmojiRow inserts the emoji on the popup's content row (0 is the
+// first result below the popup border) and closes the picker.
+func (m *Model) ClickEmojiRow(row int) bool {
+	if !m.emojiActive || !m.emojiPicker.SelectRow(row) {
+		return false
+	}
+	entry, ok := m.emojiPicker.SelectedEntry()
+	if !ok {
+		return false
+	}
+	m.insertEmoji(entry.Name)
+	m.emojiActive = false
+	m.emojiPicker.Close()
+	m.autoGrow()
+	return true
+}
+
+// ScrollEmojiPopup moves the emoji highlight one row, for a wheel notch
+// over the popup.
+func (m *Model) ScrollEmojiPopup(up bool) bool {
+	if !m.emojiActive {
+		return false
+	}
+	if up {
+		m.emojiPicker.MoveUp()
+	} else {
+		m.emojiPicker.MoveDown()
+	}
+	return true
+}
+
 // CloseEmoji dismisses the emoji picker without selecting.
 func (m *Model) CloseEmoji() {
 	m.emojiActive = false
