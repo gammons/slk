@@ -449,6 +449,7 @@ greppable by name; no line numbers, because these files move.
 | Compare a draft form with a capture, some fields by shape | `assertDraftForm(t, got, capture, shapes)` (`internal/slack/drafts_test.go`) |
 | The ANSI line whose plain text contains a string, so a highlight can be checked on that row; the selected-message highlight's background SGR (`48;2;R;G;B`), focused or not | `rawLineContaining(view, text)`, `selectionTintSGR(focused)` (`internal/ui/insert_mode_highlight_test.go`) |
 | The `38;2` / `48;2` SGR fragment lipgloss emits for a color, and a rendered line through its left ▌ | `sgrChannel(ground, c)`, `borderHead(line)` (`internal/ui/compose/model_test.go`, `package compose`) |
+| Compare two sidebar rows' ANSI styling with the text removed, and whether a row carries bold (`\x1b[1m` or `\x1b[1;`) | `sgrCodes(s)`, `rowBold(s)` (`internal/ui/sidebar/drafts_row_test.go`, `package sidebar`) |
 
 ### Known duplication — do not add to it
 

@@ -2369,31 +2369,27 @@ func (m *Model) buildCache(width int) {
 		isThreadsRow: true,
 	})
 
-	// Synthetic "Drafts" row, rendered directly below Threads. Same
-	// treatment: the App activates the Drafts view when
-	// IsDraftsSelected() is true. The badge is the draft count.
+	// Synthetic "Drafts" row, rendered directly below Threads. The App
+	// activates the Drafts view when IsDraftsSelected() is true. The
+	// count is how many drafts exist, not an unread: it stays in the
+	// row's own style (no bold, no ChannelUnread, no accent "•"),
+	// however large it is. Selection and the active-view bar still use
+	// their own styles, below.
 	draftsLabel := " ✎ Drafts"
 	draftsCursor := cursorSelected + "✎ Drafts"
 	draftsActiveLabel := activeBorder + "✎ Drafts"
 	if m.draftsCount > 0 {
-		badge := m.countBadge(draftsLabel, m.draftsCount, width, dotStyle)
-		draftsLabel += badge
-		draftsCursor += badge
-		draftsActiveLabel += badge
+		suffix := " " + fmt.Sprintf("%d", m.draftsCount)
+		draftsLabel += suffix
+		draftsCursor += suffix
+		draftsActiveLabel += suffix
 	}
 	draftsAttrs := bgAnsi
-	if m.draftsCount > 0 {
-		draftsAttrs += "\x1b[1m"
-	}
 	draftsPill := draftsLabel
 	draftsLabel = messages.ReapplyBgAfterResets(draftsLabel, draftsAttrs)
 	draftsCursor = messages.ReapplyBgAfterResets(draftsCursor, draftsAttrs)
 	draftsActiveLabel = messages.ReapplyBgAfterResets(draftsActiveLabel, draftsAttrs)
-	draftsBaseStyle := styles.ChannelNormal
-	if m.draftsCount > 0 {
-		draftsBaseStyle = styles.ChannelUnread
-	}
-	draftsNormal := draftsBaseStyle.Width(width - 2).Render(draftsLabel)
+	draftsNormal := styles.ChannelNormal.Width(width - 2).Render(draftsLabel)
 	draftsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(draftsCursor)
 	if pillAttrs != "" {
 		draftsSelectedRow = pillRow(draftsPill, width, pillAttrs)
