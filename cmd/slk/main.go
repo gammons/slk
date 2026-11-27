@@ -2074,7 +2074,7 @@ func run() error {
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				SectionDefaults:  wctx.SectionDefaults,
 				InitialActive:    isInitial,
-				LastChannelID:    mostRecentlyVisitedChannel(wctx.LastVisitedByChannel),
+				LastChannelID:    mostRecentlyVisitedChannelAmong(wctx.LastVisitedByChannel, channelIDSet(wctx.Channels)),
 				DefaultChannel:   cfgSnap.ResolveDefaultChannel(wctx.TeamID),
 			})
 			// From here on every name the store learns reaches the UI.
