@@ -24,6 +24,9 @@ func TestRenderMessage_SixelAvatarIsAnImage(t *testing.T) {
 	if got.row != 0 || got.col != 1 || got.width != 4 || got.height != 2 || got.key != "avatar-U1-abc" {
 		t.Errorf("avatar image = %+v, want row 0 col 1, 4x2, key avatar-U1-abc", got)
 	}
+	if !got.margin {
+		t.Error("avatar image does not carry the blank-gutter margin flag")
+	}
 	if strings.Join(got.fallback, "\n") != "AVAV\nAVAV" {
 		t.Errorf("fallback = %q, want the halfblock avatar", got.fallback)
 	}
@@ -72,5 +75,28 @@ func TestView_SixelAvatarIsPlaced(t *testing.T) {
 	}
 	if got[0].Col != 1 || got[0].Cols != 4 || got[0].Rows != 2 {
 		t.Errorf("avatar placement = %+v, want col 1, 4x2", got[0])
+	}
+	if got[0].MarginSGR != MarginBgANSI(false, false, false) {
+		t.Errorf("avatar MarginSGR = %q, want the theme background %q", got[0].MarginSGR, MarginBgANSI(false, false, false))
+	}
+}
+
+// A message that mentions the user paints its avatar gutter on the
+// mention tint; the sixel margin must be repainted with the same colour.
+func TestView_SixelAvatarMarginUsesMentionTint(t *testing.T) {
+	msg := MessageItem{TS: "1700000000.000000", UserName: "lola", UserID: "U1", Text: "hello <@U9>", Timestamp: "11:08 AM"}
+	m := New([]MessageItem{msg}, "general")
+	m.SetCurrentUser("U9")
+	m.SetAvatarFunc(func(string) string { return "AVAV\nAVAV" })
+	m.SetSixelAvatarFunc(func(userID string) (string, []byte, bool) {
+		return "avatar-" + userID, []byte("\x1bPq#0~-\x1b\\"), true
+	})
+	_ = m.View(30, 100)
+	got := m.SixelPlacements()
+	if len(got) != 1 {
+		t.Fatalf("SixelPlacements() = %+v, want the avatar's one", got)
+	}
+	if got[0].MarginSGR != MentionTintBgANSI() {
+		t.Errorf("avatar MarginSGR = %q, want the mention tint %q", got[0].MarginSGR, MentionTintBgANSI())
 	}
 }

@@ -61,13 +61,19 @@ func absoluteWindowSixelPlacements(
 		if col+paint.Cols > right || row+paint.Rows > bottom {
 			continue
 		}
+		margin := paint.MarginSGR
+		if col+paint.Cols >= right || row+paint.Rows >= bottom {
+			// The margin cell would land on the pane border.
+			margin = ""
+		}
 		out = append(out, imgpkg.SixelPlacement{
-			Key:   paint.Key,
-			Row:   row + 1, // CUP is 1-based
-			Col:   col + 1,
-			Rows:  paint.Rows,
-			Cols:  paint.Cols,
-			Bytes: paint.Bytes,
+			Key:       paint.Key,
+			Row:       row + 1, // CUP is 1-based
+			Col:       col + 1,
+			Rows:      paint.Rows,
+			Cols:      paint.Cols,
+			Bytes:     paint.Bytes,
+			MarginSGR: margin,
 		})
 	}
 	return out
@@ -92,12 +98,13 @@ func (a *App) absolutePreviewSixelPlacement(p imgpkg.SixelPaint) (imgpkg.SixelPl
 	top := p.Row
 
 	return imgpkg.SixelPlacement{
-		Key:   p.Key,
-		Row:   top + 1, // CUP is 1-based
-		Col:   left + 1,
-		Rows:  p.Rows,
-		Cols:  p.Cols,
-		Bytes: p.Bytes,
+		Key:       p.Key,
+		Row:       top + 1, // CUP is 1-based
+		Col:       left + 1,
+		Rows:      p.Rows,
+		Cols:      p.Cols,
+		Bytes:     p.Bytes,
+		MarginSGR: p.MarginSGR,
 	}, true
 }
 

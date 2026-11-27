@@ -93,6 +93,11 @@ type SixelPaint struct {
 	Row, Col   int
 	Rows, Cols int
 	Bytes      []byte
+	// MarginSGR, when non-empty, is the background for the cells a
+	// sixel cursor advance paints right of and below the image. The
+	// painter repaints them after the image. Only avatars set it: their
+	// margins are blank gutter cells.
+	MarginSGR string
 }
 
 // NewPreview returns an open preview displaying the given image.

@@ -72,6 +72,9 @@ type EntryPayload struct {
 	// fully visible and substitutes its halfblock fallback otherwise.
 	// Both panes fill it from RenderedMessage.SixelRows.
 	SixelRows []SixelImage
+	// MentionsSelf is whether this message mentions the user, so its
+	// row (and the avatar gutter beside it) carries the mention tint.
+	MentionsSelf bool
 }
 
 // SelectedLines returns the rows to draw for a cursor entry e: its
@@ -135,6 +138,7 @@ type SixelImage struct {
 	width    int      // image width in cells; the erase footprint
 	row      int      // entry row of the image's top-left cell
 	col      int      // display column within the entry's rows where the image starts
+	margin   bool     // avatar: the cell right of and below the image is blank gutter
 }
 
 // OpenImagePreviewMsg requests opening the full-screen preview overlay
@@ -2054,7 +2058,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		Trail:      trail,
 		Hits:       append(r.Hits, w.LinkHits...),
 	}
-	return entry, EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows}
+	return entry, EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows, MentionsSelf: r.MentionsSelf}
 }
 
 // buildCache pre-renders all messages and day separators, splitting each
@@ -2619,6 +2623,9 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			intersectsLoading := m.loading && windowRow <= 0 && windowRow+rows > 0
 			intersectsMoreBelow := frame.MoreBelow && windowRow <= msgAreaHeight-1 && windowRow+rows > msgAreaHeight-1
 			return intersectsLoading || intersectsMoreBelow
+		},
+		func(i int) string {
+			return MarginBgANSI(i == m.selected, m.focused, m.cache[i].MentionsSelf)
 		})
 	if kittyFlushBuf.Len() > 0 {
 		_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())

@@ -1341,7 +1341,10 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 					return parentRendered.SixelRows
 				}
 				return nil
-			}, nil)
+			}, nil,
+			func(i int) string {
+				return messages.MarginBgANSI(m.selected == parentSelected, m.focused, parentRendered.MentionsSelf)
+			})
 		rows := m.list.Compose(frame, "", "", applySelection)
 		return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
 	}
@@ -1404,7 +1407,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				ColOffset:  1,
 				Hits:       append(r.Hits, w.LinkHits...),
 			})
-			m.cache = append(m.cache, messages.EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows})
+			m.cache = append(m.cache, messages.EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows, MentionsSelf: r.MentionsSelf})
 			m.replyIDToIdx[reply.TS] = i
 		}
 		m.cacheWidth = width
@@ -1441,27 +1444,35 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	entries := make([]entrylist.Entry, 0, 2*len(m.replyEntries)+2)
 	entries = append(entries, parent)
 	// sixel is index-aligned with entries: the images of the parent and
-	// of each reply, nil for the decorations between them.
+	// of each reply, nil for the decorations between them. margins is
+	// aligned the same way: the background an avatar's sixel margin is
+	// repainted with, "" for entries with no avatar gutter.
 	sixel := make([][]messages.SixelImage, 0, cap(entries))
+	margins := make([]string, 0, cap(entries))
 	sixel = append(sixel, parentRendered.SixelRows)
+	margins = append(margins, messages.MarginBgANSI(m.selected == parentSelected, m.focused, parentRendered.MentionsSelf))
 	lastDate := messages.DateFromTS(m.parent.TS)
 	landmarkInserted := false
 	for i, e := range m.replyEntries {
 		if replyDate := messages.DateFromTS(m.replies[i].TS); replyDate != "" && replyDate != lastDate {
 			entries = append(entries, decoration(dateSeparatorStyle.Render("── "+messages.FormatDateSeparator(replyDate)+" ──")))
 			sixel = append(sixel, nil)
+			margins = append(margins, "")
 			lastDate = replyDate
 		}
 		if !landmarkInserted && newLandmark != "" && m.replies[i].TS > m.unreadBoundaryTS {
 			entries = append(entries, decoration(newLandmark))
 			sixel = append(sixel, nil)
+			margins = append(margins, "")
 			landmarkInserted = true
 		}
 		entries = append(entries, e)
 		sixel = append(sixel, m.cache[i].SixelRows)
+		margins = append(margins, messages.MarginBgANSI(m.selected == i, m.focused, m.cache[i].MentionsSelf))
 		if i < len(m.replyEntries)-1 {
 			entries = append(entries, decoration(replySeparator))
 			sixel = append(sixel, nil)
+			margins = append(margins, "")
 		}
 	}
 	m.list.SetEntries(entries, width, keepPosition)
@@ -1492,7 +1503,8 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// scrollbar.
 	frame := m.list.Layout(m.selected, m.cursorLines)
 	m.sixelPaints = messages.PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), replyAreaHeight,
-		func(i int) []messages.SixelImage { return sixel[i] }, nil)
+		func(i int) []messages.SixelImage { return sixel[i] }, nil,
+		func(i int) string { return margins[i] })
 	rows := m.list.Compose(frame, "", "", applySelection)
 	m.layoutValid = true
 	return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)

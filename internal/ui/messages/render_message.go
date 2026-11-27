@@ -243,7 +243,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// Row 0 and column 1: placeAvatarBeside puts the avatar beside
 		// the first content row, right of the pane's border (col 0).
 		avatarImg = &SixelImage{key: opt.AvatarSixelKey, bytes: opt.AvatarSixel, fallback: fallback,
-			height: len(fallback), width: cols, row: 0, col: 1}
+			height: len(fallback), width: cols, row: 0, col: 1, margin: true}
 	}
 
 	// If we have an avatar, reserve space on the left for it

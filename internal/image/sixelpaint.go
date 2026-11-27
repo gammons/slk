@@ -25,6 +25,11 @@ type SixelPlacement struct {
 	Row, Col   int
 	Rows, Cols int
 	Bytes      []byte
+	// MarginSGR, when non-empty, is the background for the cells a
+	// sixel cursor advance paints right of and below the image. The
+	// painter repaints them after the image. Only avatars set it: their
+	// margins are blank gutter cells.
+	MarginSGR string
 
 	// Guard fingerprints the frame text underneath this placement.
 	//
@@ -70,7 +75,7 @@ func PlacementKey(identity string, payload []byte, cols, rows int) string {
 // identity (a cache key), and the byte slices are large.
 func (p SixelPlacement) sameSlot(q SixelPlacement) bool {
 	return p.Key == q.Key && p.Row == q.Row && p.Col == q.Col &&
-		p.Rows == q.Rows && p.Cols == q.Cols && p.Guard == q.Guard
+		p.Rows == q.Rows && p.Cols == q.Cols && p.Guard == q.Guard && p.MarginSGR == q.MarginSGR
 }
 
 // sixelSlot is the screen position that keys the painted set. A plain
@@ -210,6 +215,20 @@ func writeSixelAt(w io.Writer, pl SixelPlacement) {
 	fmt.Fprint(w, "\x1b7")                        // save cursor
 	fmt.Fprintf(w, "\x1b[%d;%dH", pl.Row, pl.Col) // absolute position
 	w.Write(pl.Bytes)
+	if pl.MarginSGR != "" {
+		// Repaint the cells right of and below the image: a terminal
+		// paints them with its default background as the sixel cursor
+		// advances. They are blank avatar gutter cells.
+		for r := 0; r < pl.Rows; r++ {
+			fmt.Fprintf(w, "\x1b[%d;%dH%s \x1b[0m", pl.Row+r, pl.Col+pl.Cols, pl.MarginSGR)
+		}
+		fmt.Fprintf(w, "\x1b[%d;%dH%s", pl.Row+pl.Rows, pl.Col, pl.MarginSGR)
+		for c := 0; c <= pl.Cols; c++ {
+			fmt.Fprint(w, " ")
+		}
+		fmt.Fprint(w, "\x1b[0m")
+	}
+
 	fmt.Fprint(w, "\x1b8") // restore cursor
 }
 

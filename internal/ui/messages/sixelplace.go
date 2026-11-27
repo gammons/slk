@@ -20,7 +20,7 @@ import (
 // images of list entry i, nil for an entry that has none. blocked may
 // be nil; the channel pane uses it to keep an image off the rows its
 // loading and "more below" indicators own.
-func PlaceSixel(frame *entrylist.Frame, offsets []int, yOffset, height int, images func(i int) []SixelImage, blocked func(windowRow, rows int) bool) []imgpkg.SixelPaint {
+func PlaceSixel(frame *entrylist.Frame, offsets []int, yOffset, height int, images func(i int) []SixelImage, blocked func(windowRow, rows int) bool, marginSGR func(i int) string) []imgpkg.SixelPaint {
 	var paints []imgpkg.SixelPaint
 	var fallback map[int]string
 	for _, v := range frame.Visible {
@@ -36,13 +36,18 @@ func PlaceSixel(frame *entrylist.Frame, offsets []int, yOffset, height int, imag
 			windowRow := v.Row + (sx.row - v.From)
 			if fullyVisible && (blocked == nil || !blocked(windowRow, sx.height)) {
 				if windowRow >= 0 && windowRow < len(frame.Rows) {
+					margin := ""
+					if sx.margin && marginSGR != nil {
+						margin = marginSGR(v.Index)
+					}
 					paints = append(paints, imgpkg.SixelPaint{
-						Key:   imgpkg.PlacementKey(sx.key, sx.bytes, sx.width, sx.height),
-						Row:   windowRow,
-						Col:   sx.col,
-						Rows:  sx.height,
-						Cols:  sx.width,
-						Bytes: sx.bytes,
+						Key:       imgpkg.PlacementKey(sx.key, sx.bytes, sx.width, sx.height),
+						Row:       windowRow,
+						Col:       sx.col,
+						Rows:      sx.height,
+						Cols:      sx.width,
+						Bytes:     sx.bytes,
+						MarginSGR: margin,
 					})
 				}
 				continue
