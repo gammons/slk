@@ -216,3 +216,57 @@ func skipPipeProbeOnWindows(t *testing.T) {
 		t.Skip("the Windows poll path reads console input, which a pipe is not")
 	}
 }
+
+func TestProbeDECRQM_SendsQueryAndParsesReply(t *testing.T) {
+	cases := []struct {
+		name      string
+		reply     string
+		wantValue int
+		wantOK    bool
+	}{
+		{"set", "\x1b[?2027;1$y", 1, true},
+		{"permanently set", "\x1b[?2027;3$y", 3, true},
+		{"reset", "\x1b[?2027;2$y", 2, true},
+		{"permanently reset", "\x1b[?2027;4$y", 4, true},
+		{"not recognized", "\x1b[?2027;0$y", 0, true},
+		{"other mode answered first", "\x1b[?2026;1$y\x1b[?2027;1$y", 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var w bytes.Buffer
+			r := strings.NewReader(tc.reply)
+			value, ok := ProbeDECRQM(&w, r, 2027, time.Second)
+			if !bytes.Contains(w.Bytes(), []byte("\x1b[?2027$p")) {
+				t.Errorf("query written = %q, want the DECRQM 2027 query", w.String())
+			}
+			if !ok || value != tc.wantValue {
+				t.Errorf("ProbeDECRQM = (%d, %v), want (%d, %v)", value, ok, tc.wantValue, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestProbeDECRQM_TimeoutFails(t *testing.T) {
+	var w bytes.Buffer
+	if _, ok := ProbeDECRQM(&w, blockingReader{}, 2027, 50*time.Millisecond); ok {
+		t.Error("silent terminal reported ok")
+	}
+	if !bytes.Contains(w.Bytes(), []byte("\x1b[?2027$p")) {
+		t.Errorf("query written = %q, want the DECRQM 2027 query", w.String())
+	}
+}
+
+func TestScanForModeReport_IncompleteStaysWaiting(t *testing.T) {
+	if scanForModeReport([]byte("\x1b[?2027;1$"), 2027) {
+		t.Error("incomplete reply (missing y) reported complete")
+	}
+	if scanForModeReport([]byte("\x1b[?2027;"), 2027) {
+		t.Error("reply without a value reported complete")
+	}
+	if scanForModeReport([]byte("\x1b[?2026;1$y"), 2027) {
+		t.Error("another mode's reply reported as 2027's")
+	}
+	if !scanForModeReport([]byte("\x1b[?2027;3$y"), 2027) {
+		t.Error("complete reply not recognized")
+	}
+}

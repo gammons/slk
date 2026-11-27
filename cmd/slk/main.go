@@ -520,6 +520,30 @@ func run() error {
 		}
 	}
 	debuglog.ImgRender("image protocol: %s", proto)
+
+	// Ask the terminal itself whether it measures text by grapheme
+	// cluster (DECRQM 2027). The emoji glyph rule needs the terminal's
+	// own answer: on a wcwidth terminal a VS16 emoji draws narrower than
+	// lipgloss measures, which is what the one-codepoint rule protects.
+	// bubbletea's mode report cannot be trusted for this — slk
+	// synthesizes one (declareGraphemeWidths, internal/ui) to force the
+	// renderer onto every terminal, and the reducer cannot tell it from
+	// a real one. Same multiplexer guard as the sixel probe: under tmux
+	// or zellij the answer would not be the terminal's.
+	if os.Getenv("TMUX") == "" && os.Getenv("ZELLIJ") == "" &&
+		term.IsTerminal(int(os.Stdin.Fd())) {
+		state, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			debuglog.ImgRender("2027 probe skipped: cannot enter raw mode: %v", err)
+		} else {
+			value, ok := imgpkg.ProbeDECRQM(os.Stdout, os.Stdin, 2027, 200*time.Millisecond)
+			if rerr := term.Restore(int(os.Stdin.Fd()), state); rerr != nil {
+				debuglog.ImgRender("term restore after 2027 probe: %v", rerr)
+			}
+			emojiwidth.SetGraphemeClusters(ok && (value == 1 || value == 3))
+			debuglog.ImgRender("unicode core (2027) probe: ok=%v value=%d", ok, value)
+		}
+	}
 	// Record the placement mode before anything can upload (the avatar
 	// cache below, the first View). A probe that downgraded kitty takes
 	// emulation with it.
