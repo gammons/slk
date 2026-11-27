@@ -914,3 +914,67 @@ func TestBackJump_FromThreadsListReturnsToThread(t *testing.T) {
 		t.Fatalf("pending navigation = %+v, want thread 5.0", p)
 	}
 }
+
+func TestJumpMark_ChannelMarkSameChannelGoesToNewest(t *testing.T) {
+	app := jumpMarkTestApp(t)
+	seedMark(t, app, "a", Location{TeamID: "T1", ChannelID: "C1"})
+	app.Update(ChannelSelectedMsg{ID: "C1", Name: "one", Type: "channel"})
+	app.messagepane.SelectByTS("1.0")
+	app.focusedPanel = PanelSidebar
+
+	driveJump(app, pressJumpChord(app, 'a'))
+
+	sel, ok := app.messagepane.SelectedMessage()
+	if !ok || sel.TS != "2.0" {
+		t.Fatalf("selected = %+v ok=%v, want the newest message 2.0", sel, ok)
+	}
+	if app.focusedPanel != PanelMessages {
+		t.Fatalf("focusedPanel = %v, want PanelMessages", app.focusedPanel)
+	}
+	if app.pendingLinkNav != nil {
+		t.Fatalf("pendingLinkNav = %+v, want nil", app.pendingLinkNav)
+	}
+}
+
+func TestJumpMark_ChannelMarkOtherChannelOpensWithoutFetchAround(t *testing.T) {
+	app := jumpMarkTestApp(t)
+	fetched := false
+	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
+		fetched = true
+		return nil
+	})
+	seedMark(t, app, "a", Location{TeamID: "T1", ChannelID: "C2"})
+	app.Update(ChannelSelectedMsg{ID: "C1", Name: "one", Type: "channel"})
+
+	driveJump(app, pressJumpChord(app, 'a'))
+
+	if app.activeChannelID != "C2" {
+		t.Fatalf("active channel = %q, want C2", app.activeChannelID)
+	}
+	sel, ok := app.messagepane.SelectedMessage()
+	if !ok || sel.TS != "10.0" {
+		t.Fatalf("selected = %+v ok=%v, want the newest message 10.0", sel, ok)
+	}
+	if fetched {
+		t.Fatal("a channel mark must not FetchAround")
+	}
+	if app.pendingLinkNav != nil {
+		t.Fatalf("pendingLinkNav = %+v, want nil", app.pendingLinkNav)
+	}
+}
+
+func TestJumpMark_ChannelMarkSameChannelLeavesOldWindow(t *testing.T) {
+	app := jumpMarkTestApp(t)
+	seedMark(t, app, "a", Location{TeamID: "T1", ChannelID: "C1"})
+	app.Update(ChannelSelectedMsg{ID: "C1", Name: "one", Type: "channel"})
+	// A permalink jump replaced the buffer with an older window that
+	// does not reach the channel's newest message (2.0).
+	app.messagepane.SetMessages([]messages.MessageItem{{TS: "0.5", Text: "old"}})
+
+	driveJump(app, pressJumpChord(app, 'a'))
+
+	sel, ok := app.messagepane.SelectedMessage()
+	if !ok || sel.TS != "2.0" {
+		t.Fatalf("selected = %+v ok=%v, want the channel's newest message 2.0", sel, ok)
+	}
+}

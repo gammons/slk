@@ -15,6 +15,7 @@ type Mark struct {
 	MessageTS   string
 	ThreadTS    string
 	ChannelName string
+	ChannelType string
 	AuthorName  string
 	Excerpt     string
 }
@@ -29,18 +30,19 @@ func (db *DB) UpsertMark(workspaceID, letter string, m Mark) error {
 	}
 	const q = `
 INSERT INTO marks
-    (workspace_id, letter, channel_id, message_ts, thread_ts, channel_name, author_name, excerpt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    (workspace_id, letter, channel_id, message_ts, thread_ts, channel_name, channel_type, author_name, excerpt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(workspace_id, letter) DO UPDATE SET
     channel_id   = excluded.channel_id,
     message_ts   = excluded.message_ts,
     thread_ts    = excluded.thread_ts,
     channel_name = excluded.channel_name,
+    channel_type = excluded.channel_type,
     author_name  = excluded.author_name,
     excerpt      = excluded.excerpt
 `
 	_, err := db.conn.Exec(q, workspaceID, letter,
-		m.ChannelID, m.MessageTS, m.ThreadTS, m.ChannelName, m.AuthorName, m.Excerpt)
+		m.ChannelID, m.MessageTS, m.ThreadTS, m.ChannelName, m.ChannelType, m.AuthorName, m.Excerpt)
 	if err != nil {
 		return fmt.Errorf("upserting mark %s/%s: %w", workspaceID, letter, err)
 	}
@@ -50,7 +52,7 @@ ON CONFLICT(workspace_id, letter) DO UPDATE SET
 // ListMarks returns every mark row for the workspace, in letter order.
 func (db *DB) ListMarks(workspaceID string) ([]Mark, error) {
 	const q = `
-SELECT workspace_id, letter, channel_id, message_ts, thread_ts, channel_name, author_name, excerpt
+SELECT workspace_id, letter, channel_id, message_ts, thread_ts, channel_name, channel_type, author_name, excerpt
 FROM marks
 WHERE workspace_id = ?
 ORDER BY letter
@@ -65,7 +67,7 @@ ORDER BY letter
 	for rows.Next() {
 		var m Mark
 		if err := rows.Scan(&m.WorkspaceID, &m.Letter, &m.ChannelID, &m.MessageTS,
-			&m.ThreadTS, &m.ChannelName, &m.AuthorName, &m.Excerpt); err != nil {
+			&m.ThreadTS, &m.ChannelName, &m.ChannelType, &m.AuthorName, &m.Excerpt); err != nil {
 			return nil, fmt.Errorf("scanning mark: %w", err)
 		}
 		out = append(out, m)

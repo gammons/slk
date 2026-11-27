@@ -20,6 +20,7 @@ type Mark struct {
 	// Letter is the mark name ('a'-'z' lowercase, 'A'-'Z' uppercase).
 	Letter      string
 	ChannelName string
+	ChannelType string
 	AuthorName  string
 	Excerpt     string
 }

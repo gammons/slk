@@ -123,3 +123,74 @@ func TestUpsertMark_RejectsEmptyKey(t *testing.T) {
 		t.Fatal("expected an error for an empty letter")
 	}
 }
+
+func TestUpsertMark_RoundTripsChannelType(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	m := testMark("A")
+	m.MessageTS = ""
+	m.ChannelType = "dm"
+	if err := db.UpsertMark("T1", "A", m); err != nil {
+		t.Fatalf("UpsertMark: %v", err)
+	}
+	marks, err := db.ListMarks("T1")
+	if err != nil {
+		t.Fatalf("ListMarks: %v", err)
+	}
+	if len(marks) != 1 || marks[0].ChannelType != "dm" || marks[0].MessageTS != "" {
+		t.Fatalf("marks = %+v, want one dm channel mark", marks)
+	}
+}
+
+func TestUpsertMark_ChannelMarkClearsMessageTS(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	msgMark := testMark("A")
+	msgMark.ThreadTS = "1700000000.000000"
+	if err := db.UpsertMark("T1", "A", msgMark); err != nil {
+		t.Fatalf("UpsertMark message: %v", err)
+	}
+	chanMark := testMark("A")
+	chanMark.MessageTS = ""
+	chanMark.ChannelType = "channel"
+	if err := db.UpsertMark("T1", "A", chanMark); err != nil {
+		t.Fatalf("UpsertMark channel: %v", err)
+	}
+	marks, err := db.ListMarks("T1")
+	if err != nil {
+		t.Fatalf("ListMarks: %v", err)
+	}
+	if len(marks) != 1 || marks[0].MessageTS != "" || marks[0].ThreadTS != "" || marks[0].ChannelType != "channel" {
+		t.Fatalf("marks = %+v, want the channel mark with no message", marks)
+	}
+}
+
+func TestMigrate_AddsMarksChannelType(t *testing.T) {
+	path := t.TempDir() + "/slk.db"
+	db, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec("ALTER TABLE marks DROP COLUMN channel_type"); err != nil {
+		t.Fatalf("drop column: %v", err)
+	}
+	db.Close()
+
+	db, err = New(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	has, err := db.hasColumn("marks", "channel_type")
+	if err != nil || !has {
+		t.Fatalf("hasColumn = %v, %v; want true", has, err)
+	}
+}

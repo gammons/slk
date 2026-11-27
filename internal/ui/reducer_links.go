@@ -251,7 +251,10 @@ func (a *App) applyLocation(loc Location, fromHistory bool) (tea.Cmd, bool) {
 		return nil, false
 	}
 	a.pendingLinkNav = &pendingLinkNav{Location: loc}
-	if !fromHistory && string(loc.ChannelID) == a.activeChannelID {
+	// A channel-only location (a channel mark) always reopens: the buffer
+	// may be an older permalink window that never reaches the newest message.
+	channelOnly := loc.MessageTS == "" && loc.ThreadTS == ""
+	if !fromHistory && !channelOnly && string(loc.ChannelID) == a.activeChannelID {
 		// Already viewing the channel; unless its fetch is still
 		// running (below), the loaded buffer is as good as it gets,
 		// so complete authoritatively right now.
