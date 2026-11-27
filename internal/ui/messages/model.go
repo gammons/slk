@@ -283,6 +283,13 @@ type Model struct {
 	// the same message again. Insert mode sets it.
 	hideCursor bool
 
+	// lastYOffset and scrollDirty detect an actual scroll between
+	// renders. Sixel pixels move with the terminal text, so the App
+	// must force one full erase/repaint after a scroll; comparing line
+	// shifts instead also fires on unrelated animations.
+	lastYOffset int
+	scrollDirty bool
+
 	// coloredUsernames enables deterministic per-user coloring of the
 	// username in each message row. Set from config via
 	// SetColoredUsernames; invalidates the render cache so existing rows
@@ -343,6 +350,14 @@ func (m *Model) SetCursorHighlight(on bool) {
 	}
 	m.hideCursor = hide
 	m.dirty()
+}
+
+// TakeScrollDirty reports whether the pane scrolled since the last call
+// and clears the flag. The App uses it to force one sixel repaint.
+func (m *Model) TakeScrollDirty() bool {
+	d := m.scrollDirty
+	m.scrollDirty = false
+	return d
 }
 
 // HandleEmojiImageReady is invoked by the host (App.Update) when an
@@ -2587,6 +2602,10 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// scroll (WithCursorFollowsScroll), and slice the visible rows.
 	frame := m.list.Layout(m.selected, m.cursorLines)
 	m.selected = frame.Cursor
+	if off := m.list.YOffset(); off != m.lastYOffset {
+		m.lastYOffset = off
+		m.scrollDirty = true
+	}
 
 	// Per-frame image side effects:
 	//   * Kitty image uploads (entry.flushes) are collected from every
@@ -2625,7 +2644,11 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			return intersectsLoading || intersectsMoreBelow
 		},
 		func(i int) string {
-			return MarginBgANSI(i == m.selected, m.focused, m.cache[i].MentionsSelf)
+			ref := -1
+			if entries := m.list.Entries(); i >= 0 && i < len(entries) {
+				ref = entries[i].Ref
+			}
+			return MarginBgANSI(ref == m.selected && !m.hideCursor, m.focused, m.cache[i].MentionsSelf)
 		})
 	if kittyFlushBuf.Len() > 0 {
 		_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
