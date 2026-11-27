@@ -1341,4 +1341,19 @@ func TestSetThread_SameRepliesKeepRenderCache(t *testing.T) {
 	if m.cache != nil {
 		t.Error("another channel's thread kept the reply cache")
 	}
+
+	// Reaction navigation on an earlier reply is drawn in its cached
+	// rows, and the selection moves to the newest reply, so the cache
+	// is rebuilt.
+	m.SetThread(parent, replies(), "C123", "1700000001.000000")
+	m.MoveUp()
+	m.EnterReactionNav()
+	if !m.ReactionNavActive() {
+		t.Fatal("reaction navigation did not start on reply 1")
+	}
+	m.View(30, 80)
+	m.SetThread(parent, replies(), "C123", "1700000001.000000")
+	if m.cache != nil {
+		t.Error("same replies kept the cache with reaction navigation on another reply")
+	}
 }

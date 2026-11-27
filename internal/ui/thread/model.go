@@ -279,8 +279,10 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	// already on screen. Their rendered cache is kept then, since a
 	// rebuild of a long thread blocks the UI for hundreds of ms. The
 	// parent is drawn every frame, so only the replies are compared. Any
-	// difference rebuilds everything, as before.
-	keepCache := sameThread && reflect.DeepEqual(replies, m.replies)
+	// difference rebuilds everything, as before. So does active reaction
+	// navigation, whose highlight is in the cached rows of the reply that
+	// was selected, while the selection moves to the newest reply below.
+	keepCache := sameThread && !m.nav.Active && reflect.DeepEqual(replies, m.replies)
 	m.replies = replies
 	// Per the doc comment, the cursor starts at the bottom (newest reply)
 	// so a long thread opens scrolled to the latest activity rather than
