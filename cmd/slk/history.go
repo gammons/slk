@@ -572,13 +572,22 @@ func loadCachedThreadReplies(
 // fetchChannelMessages returns the channel's recent messages from the
 // network, with cache write-through. The return-value contract:
 //
-//	nil   - the network call FAILED (transient error, auth issue, etc.)
+//	nil   - the network call FAILED (transient error, auth issue, etc.),
+//	        or Slack returned an empty window while the cache already
+//	        holds this channel's messages (see below)
 //	[]    - the channel is genuinely empty
 //	[...] - normal case
 //
 // The MessagesLoadedMsg handler distinguishes nil from empty so a
 // failed background refresh doesn't wipe a successfully-rendered
 // cache view. Do NOT change nil to mean "empty channel".
+//
+// An empty window is not proof the channel is empty: a workspace whose
+// plan no longer serves old history (Slack's free plan keeps 90 days)
+// answers with no messages, no error and no warning, and the cached
+// messages are the only copy left. Keep them rather than blanking a
+// conversation Slack itself has hidden; a channel with nothing cached
+// still renders as empty.
 func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames *userNameStore, tsFormat string, avatarCache *avatar.Cache, router *workspaceRouter) []messages.MessageItem {
 	ctx := context.Background()
 	debuglog.Cache("fetchChannelMessages: channel=%s entry", channelID)
@@ -588,6 +597,17 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 		debuglog.Cache("fetchChannelMessages: GetHistory %s: %v dur_ms=%d (returning nil → keep cache)",
 			channelID, err, time.Since(start).Milliseconds())
 		return nil
+	}
+	if len(history) == 0 {
+		// Slack serves no history for a channel whose messages are past
+		// its retention window, and reports it as an empty success. If
+		// the cache still has the channel's messages, they are all that
+		// is left; keep them.
+		if rows, gerr := db.GetMessages(channelID, 1, ""); gerr == nil && len(rows) > 0 {
+			debuglog.Cache("fetchChannelMessages: channel=%s Slack returned no messages but %s is cached (retention?); keeping cache",
+				channelID, rows[0].TS)
+			return nil
+		}
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
