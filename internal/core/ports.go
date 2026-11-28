@@ -401,7 +401,7 @@ type DesktopService interface {
 
 	// ReportStatus mirrors the unread state onto the user's configured
 	// status command, if any.
-	ReportStatus(unread, otherUnread int, workspace, title string)
+	ReportStatus(unread, otherUnread, mentions int, workspace, title string)
 }
 
 // EditorService runs the user's external editor over a compose draft,

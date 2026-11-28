@@ -165,7 +165,7 @@ func TestWindowTitleFollowsTheHiddenSet(t *testing.T) {
 func TestTogglingTheOptionBeforeAWorkspaceReportsNothing(t *testing.T) {
 	a := newTestApp(t)
 	reports := 0
-	a.setStatusReporterForTest(func(int, int, string, string) { reports++ })
+	a.setStatusReporterForTest(func(int, int, int, string, string) { reports++ })
 	a.SetHideDeactivatedUsers(false)
 	a.SetHideDeactivatedUsers(true)
 	if reports != 0 {

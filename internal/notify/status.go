@@ -12,6 +12,7 @@ import (
 type statusState struct {
 	unread      int
 	otherUnread int
+	mentions    int
 	workspace   string
 	title       string
 }
@@ -54,11 +55,11 @@ func NewStatusReporter(command string) *StatusReporter {
 // Enqueue hands the worker a new unread state and returns immediately, so it
 // is safe to call from the UI goroutine. A still-pending state is replaced
 // rather than queued behind. Nil-safe (no-op).
-func (r *StatusReporter) Enqueue(unread, otherUnread int, workspace, title string) {
+func (r *StatusReporter) Enqueue(unread, otherUnread, mentions int, workspace, title string) {
 	if r == nil {
 		return
 	}
-	s := statusState{unread: unread, otherUnread: otherUnread, workspace: workspace, title: title}
+	s := statusState{unread: unread, otherUnread: otherUnread, mentions: mentions, workspace: workspace, title: title}
 	for {
 		select {
 		case r.latest <- s:
@@ -79,19 +80,20 @@ func (r *StatusReporter) Enqueue(unread, otherUnread int, workspace, title strin
 // debuglog ([notify]) rather than dropped, since nothing else observes them.
 func (r *StatusReporter) run() {
 	for s := range r.latest {
-		if err := r.Report(s.unread, s.otherUnread, s.workspace, s.title); err != nil {
+		if err := r.Report(s.unread, s.otherUnread, s.mentions, s.workspace, s.title); err != nil {
 			debuglog.Notify("status_command failed: %v", err)
 		}
 	}
 }
 
 // Report runs the status_command synchronously with the current unread state
-// exposed as $SLK_UNREAD, $SLK_OTHER_UNREAD, $SLK_WORKSPACE and $SLK_TITLE.
+// exposed as $SLK_UNREAD, $SLK_OTHER_UNREAD, $SLK_MENTIONS, $SLK_WORKSPACE and
+// $SLK_TITLE.
 // Values are passed through the environment rather than interpolated into the
 // command, so a workspace name or title can't inject shell syntax. Nil-safe
 // (no-op). Production callers should go through Enqueue, which adds the
 // serialization and coalescing described on StatusReporter.
-func (r *StatusReporter) Report(unread, otherUnread int, workspace, title string) error {
+func (r *StatusReporter) Report(unread, otherUnread, mentions int, workspace, title string) error {
 	if r == nil {
 		return nil
 	}
@@ -99,6 +101,7 @@ func (r *StatusReporter) Report(unread, otherUnread int, workspace, title string
 	cmd.Env = append(os.Environ(),
 		"SLK_UNREAD="+strconv.Itoa(unread),
 		"SLK_OTHER_UNREAD="+strconv.Itoa(otherUnread),
+		"SLK_MENTIONS="+strconv.Itoa(mentions),
 		"SLK_WORKSPACE="+workspace,
 		"SLK_TITLE="+title,
 	)

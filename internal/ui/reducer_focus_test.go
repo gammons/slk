@@ -372,7 +372,7 @@ func TestActiveChannelArrival_NotifiesReadStateOnlyWhenBlurred(t *testing.T) {
 			// SetStatusReporter is invoked by every
 			// notifyReadStateChanged call; see app.go:3150.
 			var reports int
-			app.setStatusReporterForTest(func(int, int, string, string) { reports++ })
+			app.setStatusReporterForTest(func(int, int, int, string, string) { reports++ })
 
 			// Deliberately does NOT feed the returned cmd: this
 			// counts only the repaints the arrival itself triggers,

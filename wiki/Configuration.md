@@ -89,6 +89,9 @@ quiet_hours = "22:00-08:00"   # planned
 # Executed via `sh -c` with:
 #   $SLK_UNREAD        unread channels in the active workspace (mute-filtered)
 #   $SLK_OTHER_UNREAD  other workspaces with unread channels (mute-filtered) or threads
+#   $SLK_MENTIONS      mentions, @here/@channel and unread DM messages in the
+#                      active workspace (the sidebar's mention badges added
+#                      up, muted channels included)
 #   $SLK_WORKSPACE     active workspace name
 #   $SLK_TITLE         the window-title string, e.g. "slk SW (3) +1"
 # status_command = 'my-statusbar --slack-unread "$SLK_UNREAD"'

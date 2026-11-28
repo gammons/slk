@@ -559,6 +559,24 @@ func (m *Model) UnreadChannelCount() int {
 	return len(m.UnreadChannelIDs())
 }
 
+// MentionTotal is the sum of the mention badges in the sidebar
+// (ChannelItem.MentionBadge): @-mentions, broadcasts and unread DMs,
+// muted channels included, hidden deactivated DMs left out. 0 when no
+// reader is installed. status_command gets it as $SLK_MENTIONS.
+func (m *Model) MentionTotal() int {
+	if m.readStateReader == nil {
+		return 0
+	}
+	state := m.readStateReader()
+	total := 0
+	for _, item := range m.items {
+		if !m.hidesPeer(item) {
+			total += item.MentionBadge(state[item.ID])
+		}
+	}
+	return total
+}
+
 // hidesPeer reports whether item is a DM or app row whose peer is
 // deactivated and so stays hidden, whatever its read state. The active
 // conversation is the one exemption.
