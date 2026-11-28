@@ -2017,8 +2017,11 @@ func TestNormalModeKeys(t *testing.T) {
 			key:      keyPress('z'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := statusbarText(a); !strings.Contains(got, "No other channels with mentions") {
+					t.Errorf("statusbar = %q, want the no-mentions toast", got)
+				}
 				if cmd == nil {
-					t.Fatal("cmd = nil, want the toast cmd")
+					t.Error("cmd = nil, want the toast-clear tick")
 				}
 				if got := a.sidebar.SelectedID(); got == "C2" || got == "C4" {
 					t.Errorf("sidebar moved to %q, want no jump without mentions", got)
