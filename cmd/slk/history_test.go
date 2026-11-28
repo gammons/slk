@@ -80,3 +80,53 @@ func TestFetchThreadReplies_PrunesCachedRepliesSlackDidNotReturn(t *testing.T) {
 		t.Errorf("cached thread after fetch = %v, want %v", got, want)
 	}
 }
+
+// A workspace whose plan no longer serves old history answers
+// conversations.history with an empty window, no error and no warning.
+// The cached messages are the only copy left; an authoritative empty
+// replace would blank them on screen (and did: the channel flashed its
+// cached messages, then went to "No messages yet").
+func TestFetchChannelMessages_EmptyHistoryKeepsCachedMessages(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertMessage(cache.Message{
+		TS: "1709210257.789379", ChannelID: "C1", WorkspaceID: "T1",
+		UserID: "U1", Text: "first, apparently you can not match both port and source address",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[]}`))
+	}))
+	defer srv.Close()
+
+	items := fetchChannelMessages(newTestClient(t, srv), "C1", db,
+		newUserNameStore(nil), "15:04", nil, nil)
+	if items != nil {
+		t.Fatalf("fetchChannelMessages = %#v, want nil so the cache render is kept", items)
+	}
+	rows, err := db.GetMessages("C1", 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("cached rows = %d, want the message kept", len(rows))
+	}
+}
+
+// With nothing cached, an empty response is still the truth: the
+// channel renders as empty and no phantom history appears.
+func TestFetchChannelMessages_EmptyHistoryEmptyCacheIsEmpty(t *testing.T) {
+	db := newTestDB(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[]}`))
+	}))
+	defer srv.Close()
+
+	items := fetchChannelMessages(newTestClient(t, srv), "C1", db,
+		newUserNameStore(nil), "15:04", nil, nil)
+	if items == nil || len(items) != 0 {
+		t.Fatalf("fetchChannelMessages = %#v, want an empty (non-nil) history", items)
+	}
+}
