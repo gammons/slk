@@ -336,7 +336,7 @@ func TestSeam_UnreadStateFeedsTitleAndStatusReport(t *testing.T) {
 		ws, title     string
 	}
 	var reports []report
-	wireStatusReporter(a, func(unread, other int, ws, title string) {
+	wireStatusReporter(a, func(unread, other, _ int, ws, title string) {
 		reports = append(reports, report{unread, other, ws, title})
 	})
 	a.activeTeamID = "T1"

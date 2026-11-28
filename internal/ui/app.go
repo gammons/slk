@@ -4885,7 +4885,7 @@ func (a *App) notifyReadStateChanged() {
 	other := a.workspaceRail.OtherUnreadCount(a.activeTeamID)
 	name := a.workspaceRail.NameByID(a.activeTeamID)
 	a.windowTitle = computeWindowTitle(a.activeTeamID, name, active, other)
-	a.desktop.ReportStatus(active, other, name, a.windowTitle)
+	a.desktop.ReportStatus(active, other, a.sidebar.MentionTotal(), name, a.windowTitle)
 }
 
 // applyChannelMark updates local state for a channel-level read-state

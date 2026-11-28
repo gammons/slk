@@ -66,7 +66,7 @@ func TestArrivalInAHiddenPaneStaysUnread(t *testing.T) {
 				updateAndRender(t, a, msg)
 			}
 			var reports int
-			a.setStatusReporterForTest(func(int, int, string, string) { reports++ })
+			a.setStatusReporterForTest(func(int, int, int, string, string) { reports++ })
 
 			msg := NewMessageMsg{ChannelID: "C1", Message: messages.MessageItem{TS: "99.000000", UserID: "U2"}}
 			if tt.arrival == threadReply {
@@ -149,7 +149,7 @@ func TestCatchUpFlushSkipsAPaneNoLongerDrawn(t *testing.T) {
 			}
 
 			var reports int
-			a.setStatusReporterForTest(func(int, int, string, string) { reports++ })
+			a.setStatusReporterForTest(func(int, int, int, string, string) { reports++ })
 			_, cmd = a.Update(tea.FocusMsg{})
 			feed(t, a, cmd, 0)
 

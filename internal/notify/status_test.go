@@ -11,15 +11,15 @@ import (
 
 func TestStatusReporter_RunsWithEnv(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
-	sr := NewStatusReporter(`printf '%s|%s|%s|%s' "$SLK_UNREAD" "$SLK_OTHER_UNREAD" "$SLK_WORKSPACE" "$SLK_TITLE" >` + out)
-	if err := sr.Report(3, 1, "Tone Labs", "slk TL (3) +1"); err != nil {
+	sr := NewStatusReporter(`printf '%s|%s|%s|%s|%s' "$SLK_UNREAD" "$SLK_OTHER_UNREAD" "$SLK_MENTIONS" "$SLK_WORKSPACE" "$SLK_TITLE" >` + out)
+	if err := sr.Report(3, 1, 2, "Tone Labs", "slk TL (3) +1"); err != nil {
 		t.Fatalf("Report error: %v", err)
 	}
 	got, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatalf("reading status_command output: %v", err)
 	}
-	if want := "3|1|Tone Labs|slk TL (3) +1"; string(got) != want {
+	if want := "3|1|2|Tone Labs|slk TL (3) +1"; string(got) != want {
 		t.Errorf("status_command received %q, want %q", got, want)
 	}
 }
@@ -32,14 +32,14 @@ func TestStatusReporter_EmptyIsNil(t *testing.T) {
 
 func TestStatusReporter_NilReportIsNoop(t *testing.T) {
 	var sr *StatusReporter // nil
-	if err := sr.Report(1, 0, "ws", "title"); err != nil {
+	if err := sr.Report(1, 0, 0, "ws", "title"); err != nil {
 		t.Errorf("nil StatusReporter.Report should be a no-op, got %v", err)
 	}
 }
 
 func TestStatusReporter_NilEnqueueIsNoop(t *testing.T) {
-	var sr *StatusReporter          // nil
-	sr.Enqueue(1, 0, "ws", "title") // must not panic or block
+	var sr *StatusReporter             // nil
+	sr.Enqueue(1, 0, 0, "ws", "title") // must not panic or block
 }
 
 // waitFor polls cond until it returns true or the deadline passes.
@@ -68,7 +68,7 @@ func TestStatusReporter_SerializesAndCoalesces(t *testing.T) {
 		`; if [ ! -f ` + gate + ` ]; then touch ` + started +
 		`; while [ ! -f ` + gate + ` ]; do sleep 0.01; done; fi`)
 
-	sr.Enqueue(1, 0, "ws", "t")
+	sr.Enqueue(1, 0, 0, "ws", "t")
 	waitFor(t, 5*time.Second, func() bool {
 		_, err := os.Stat(started)
 		return err == nil
@@ -76,7 +76,7 @@ func TestStatusReporter_SerializesAndCoalesces(t *testing.T) {
 
 	// Worker is blocked inside run 1: these must coalesce down to just 9.
 	for i := 2; i <= 9; i++ {
-		sr.Enqueue(i, 0, "ws", "t")
+		sr.Enqueue(i, 0, 0, "ws", "t")
 	}
 	if err := os.WriteFile(gate, nil, 0o644); err != nil {
 		t.Fatalf("creating gate file: %v", err)
@@ -103,7 +103,7 @@ func TestStatusReporter_BurstConvergesToFinalState(t *testing.T) {
 	sr := NewStatusReporter(`echo "$SLK_UNREAD" >>` + out)
 	const last = 50
 	for i := 0; i <= last; i++ {
-		sr.Enqueue(i, 0, "ws", "t")
+		sr.Enqueue(i, 0, 0, "ws", "t")
 	}
 	waitFor(t, 5*time.Second, func() bool {
 		body, err := os.ReadFile(out)
@@ -141,7 +141,7 @@ func TestStatusReporter_NotInjected(t *testing.T) {
 	out := filepath.Join(dir, "out")
 	pwned := filepath.Join(dir, "pwned")
 	sr := NewStatusReporter(`printf '%s' "$SLK_WORKSPACE" >` + out)
-	if err := sr.Report(1, 0, "; touch "+pwned, "t"); err != nil {
+	if err := sr.Report(1, 0, 0, "; touch "+pwned, "t"); err != nil {
 		t.Fatalf("Report error: %v", err)
 	}
 	if _, err := os.Stat(pwned); !os.IsNotExist(err) {

@@ -557,7 +557,7 @@ type DesktopServiceFuncs struct {
 	ReadClipboard func(f ClipboardFormat) []byte
 	Stat          func(path string) (fs.FileInfo, error)
 	SaveThread    func(parent MessageItem, replies []MessageItem, userNames, channelNames map[string]string, channelName string) (string, error)
-	ReportStatus  func(unread, otherUnread int, workspace, title string)
+	ReportStatus  func(unread, otherUnread, mentions int, workspace, title string)
 }
 
 // NewDesktopService builds a DesktopService from a DesktopServiceFuncs bundle.
@@ -596,11 +596,11 @@ func (d desktopAdapter) SaveThread(parent MessageItem, replies []MessageItem, us
 	return d.fns.SaveThread(parent, replies, userNames, channelNames, channelName)
 }
 
-func (d desktopAdapter) ReportStatus(unread, otherUnread int, workspace, title string) {
+func (d desktopAdapter) ReportStatus(unread, otherUnread, mentions int, workspace, title string) {
 	if d.fns.ReportStatus == nil {
 		return
 	}
-	d.fns.ReportStatus(unread, otherUnread, workspace, title)
+	d.fns.ReportStatus(unread, otherUnread, mentions, workspace, title)
 }
 
 // NewEditorService builds an EditorService from closures. A nil

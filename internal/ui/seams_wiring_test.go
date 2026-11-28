@@ -45,7 +45,7 @@ func wireUnreadReaders(a *App, channels func() map[string]cache.ReadState, works
 	a.SetUnreadService(core.NewUnreadService(channels, workspaces))
 }
 
-func wireStatusReporter(a *App, fn func(unread, otherUnread int, workspace, title string)) {
+func wireStatusReporter(a *App, fn func(unread, otherUnread, mentions int, workspace, title string)) {
 	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) { d.ReportStatus = fn })
 }
 

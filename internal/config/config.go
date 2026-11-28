@@ -228,6 +228,9 @@ type Notifications struct {
 	// with these variables set:
 	//   $SLK_UNREAD        unread channels in the active workspace (mute-filtered)
 	//   $SLK_OTHER_UNREAD  unread count across other workspaces
+	//   $SLK_MENTIONS      mentions, @here/@channel and unread DM messages
+	//                      in the active workspace (the sidebar's mention
+	//                      badges added up, muted channels included)
 	//   $SLK_WORKSPACE     active workspace name
 	//   $SLK_TITLE         the window-title string, e.g. "slk SW (3) +1"
 	StatusCommand string `toml:"status_command"`
