@@ -590,6 +590,23 @@ func (m *Model) hidesPeer(item ChannelItem) bool {
 // section collapse; it's an intentional "catch up on all unreads" skim,
 // not just "what's on screen".
 func (m *Model) NextUnread(afterID string, dir int) (id, name, chType string, ok bool) {
+	return m.nextMatching(afterID, dir, ChannelItem.IsVisiblyUnread)
+}
+
+// NextMention is NextUnread restricted to rows that show a mention badge
+// (ChannelItem.MentionBadge > 0): @-mentions, broadcasts and unread DMs.
+// Like the badge, it ignores mute, so a muted channel that named you is
+// still reachable. Walk order, wrapping and the afterID skip match
+// NextUnread.
+func (m *Model) NextMention(afterID string, dir int) (id, name, chType string, ok bool) {
+	return m.nextMatching(afterID, dir, func(item ChannelItem, state core.ReadState) bool {
+		return item.MentionBadge(state) > 0
+	})
+}
+
+// nextMatching walks m.filtered from afterID in direction dir, wrapping
+// around, and returns the first other row that match accepts.
+func (m *Model) nextMatching(afterID string, dir int, match func(ChannelItem, core.ReadState) bool) (id, name, chType string, ok bool) {
 	if m.readStateReader == nil {
 		return "", "", "", false
 	}
@@ -622,7 +639,7 @@ func (m *Model) NextUnread(afterID string, dir int) (id, name, chType string, ok
 		if item.ID == afterID {
 			continue
 		}
-		if item.IsVisiblyUnread(state[item.ID]) {
+		if match(item, state[item.ID]) {
 			return item.ID, item.Name, item.Type, true
 		}
 	}

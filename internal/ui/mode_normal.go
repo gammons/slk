@@ -450,6 +450,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.PrevUnread):
 		return a.jumpToUnread(-1)
 
+	case key.Matches(msg, a.keys.NextMention):
+		return a.jumpToMention(1)
+
+	case key.Matches(msg, a.keys.PrevMention):
+		return a.jumpToMention(-1)
+
 	case key.Matches(msg, a.keys.CloseThreadView):
 		// Lowercase q is "close thread view" when one is open; if
 		// no thread panel is visible it's a no-op (Q and Ctrl+C
@@ -497,6 +503,22 @@ func (a *App) jumpToUnread(dir int) tea.Cmd {
 	if !ok {
 		return toastWithClear(a, "No other unread channels", 2*time.Second)
 	}
+	return a.openSidebarChannel(id, name, chType)
+}
+
+// jumpToMention is jumpToUnread for channels with a mention badge
+// (@-mentions, broadcasts and unread DMs), so z/Z skip ordinary unread
+// traffic.
+func (a *App) jumpToMention(dir int) tea.Cmd {
+	id, name, chType, ok := a.sidebar.NextMention(a.activeChannelID, dir)
+	if !ok {
+		return toastWithClear(a, "No other channels with mentions", 2*time.Second)
+	}
+	return a.openSidebarChannel(id, name, chType)
+}
+
+// openSidebarChannel selects id in the sidebar and opens it.
+func (a *App) openSidebarChannel(id, name, chType string) tea.Cmd {
 	a.sidebar.SelectByID(id)
 	return func() tea.Msg {
 		return ChannelSelectedMsg{ID: id, Name: name, Type: chType}
