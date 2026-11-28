@@ -12,6 +12,7 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -581,6 +582,24 @@ func TestPatchUserName_BumpsVersionOnlyWhenFeedReferencesUser(t *testing.T) {
 	}
 	if !strings.Contains(m.View(20, 60), "name-U1") {
 		t.Error("View does not show the patched name")
+	}
+}
+
+// A settled emoji fetch must re-render the cards without replacing the
+// emoji context: the workspace customs map arrives after the context,
+// so a context swap here would drop it and the shortcodes would fall
+// back to literal text.
+func TestHandleEmojiImageReady_KeepsCustoms(t *testing.T) {
+	m := New(nil, "")
+	m.SetEmojiContext(messages.EmojiContext{})
+	m.SetEmojiCustoms(map[string]string{"cat-on-keyboard": "https://example.test/cat.gif"})
+	v := m.Version()
+	m.HandleEmojiImageReady("https://example.test/cat.gif")
+	if m.Version() == v {
+		t.Error("HandleEmojiImageReady did not bump the version, so a warm image would not appear")
+	}
+	if got := m.emoji.Customs["cat-on-keyboard"]; got != "https://example.test/cat.gif" {
+		t.Errorf("customs lost after an emoji image settled: %q", got)
 	}
 }
 
