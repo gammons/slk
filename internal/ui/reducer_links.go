@@ -38,6 +38,11 @@ type pendingLinkNav struct {
 	threadOpened bool
 	loadsDone    int
 	fetchApplied bool
+	// fromLink marks a jump that came from an archive permalink (a
+	// click, paste or slk --open), not a mark or a history walk. Only
+	// a link can name a conversation or reply the user cannot read,
+	// and only its failures get the link-specific wording.
+	fromLink bool
 }
 
 // Only permalink loads carry this envelope; ordinary thread refreshes must
@@ -118,7 +123,11 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		})
 		return nil, true
 	}
-	return a.routeLink(m.URL), true
+	// A clicked Slack permalink may belong to another connected
+	// workspace (a shared DM shows links with the workspace that owns
+	// them). Reuse the paste path so the workspace switch happens
+	// before the in-app jump; non-Slack links still go to the browser.
+	return a.openFinderPermalink(m.URL), true
 }
 
 // maxDisplayBudget caps how many cells of a link target the prompt shows.
@@ -207,16 +216,65 @@ func (a *App) routeLink(rawURL string) tea.Cmd {
 	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return a.browserOpener(rawURL)
 	}
-	cmd, ok := a.applyLocation(Location{
+	loc := Location{
 		TeamID:    ids.TeamID(a.activeTeamID),
 		ChannelID: pl.ChannelID,
 		MessageTS: pl.MessageTS,
 		ThreadTS:  pl.ThreadTS,
-	}, false)
+	}
+	cmd, ok := a.applyLocation(loc, false)
 	if ok {
+		if a.pendingLinkNav != nil {
+			a.pendingLinkNav.fromLink = true
+		}
 		return cmd
 	}
+	id := string(pl.ChannelID)
+	// A DM or group DM can be absent from the sidebar and cache (a
+	// Grid-shared conversation) while the permalink target is still
+	// readable. Its ID prefix says which kind it is, so open it by ID
+	// and let the fetch fill the messages.
+	if id != "" && (id[0] == 'D' || id[0] == 'G') {
+		chType := "dm"
+		if id[0] == 'G' {
+			chType = "group_dm"
+		}
+		a.pendingLinkNav = &pendingLinkNav{Location: loc, fromLink: true}
+		team := a.activeTeamID
+		return func() tea.Msg {
+			return ChannelSelectedMsg{ID: id, Type: chType, TeamID: team}
+		}
+	}
+	// A public channel the sidebar does not hold (one the user is not
+	// in, resolved only from the link) is joined first, the same as a
+	// clicked #channel mention; the join folds it into the sidebar and
+	// the channel load completes the pending navigation.
+	if id != "" && id[0] == 'C' {
+		name := a.channelNames[id]
+		a.pendingLinkNav = &pendingLinkNav{Location: loc, fromLink: true}
+		channels := a.channels
+		return func() tea.Msg {
+			if channels != nil {
+				return channels.Join(ids.ChannelID(id), name)
+			}
+			return ChannelSelectedMsg{ID: id, Name: name, Type: "channel"}
+		}
+	}
 	return a.browserOpener(rawURL)
+}
+
+// reopenLinkAsThread completes a permalink jump whose target is a thread
+// reply: channel history never contains replies, so the cached thread
+// parent (MessagesAroundLoadedMsg.ThreadTS) opens the thread instead of
+// reporting the message missing.
+func (a *App) reopenLinkAsThread(m MessagesAroundLoadedMsg) tea.Cmd {
+	a.pendingLinkNav = &pendingLinkNav{Location: Location{
+		TeamID:    ids.TeamID(a.activeTeamID),
+		ChannelID: ids.ChannelID(m.ChannelID),
+		MessageTS: ids.MessageTS(m.TargetTS),
+		ThreadTS:  ids.ThreadTS(m.ThreadTS),
+	}, fromLink: true}
+	return a.completePendingLinkNav(m.ChannelID, true)
 }
 
 // applyLocation is the single applier every in-app jump flows through
@@ -246,6 +304,9 @@ func (a *App) applyLocation(loc Location, fromHistory bool) (tea.Cmd, bool) {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return toastWithClear(a, "Upload in progress", 2*time.Second), true
 	}
+	// A new jump supersedes any earlier link fetch that never answered.
+	a.permalinkAroundChannel = ""
+	a.permalinkAroundFromLink = false
 	name, chType, found := a.channels.Lookup(loc.ChannelID)
 	if !found {
 		return nil, false
@@ -375,6 +436,8 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 	}
 	if authoritative {
 		a.pendingLinkNav = nil
+		a.permalinkAroundChannel = string(p.ChannelID)
+		a.permalinkAroundFromLink = p.fromLink
 		channels := a.channels
 		chID, ts := p.ChannelID, p.MessageTS
 		return func() tea.Msg {

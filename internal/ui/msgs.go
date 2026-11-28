@@ -111,7 +111,12 @@ type (
 		ChannelID string
 		TargetTS  string
 		Messages  []messages.MessageItem // ascending by TS, like MessagesLoadedMsg
-		Err       error
+		// ThreadTS is the target's thread parent when the cache knows
+		// the target is a reply. Channel history never contains a
+		// reply, so a permalink that names one without ?thread_ts=
+		// opens the thread instead of reporting the message missing.
+		ThreadTS string
+		Err      error
 	}
 	// ChannelSearchResultsMsg delivers in-channel FTS results for the `/`
 	// search. TSes are match timestamps newest-first; Terms are the folded
@@ -435,9 +440,16 @@ type (
 		// whether an archive permalink belongs to this workspace.
 		Domain           string
 		PermalinkDomains []string // configured aliases for archive permalink routing
-		Theme            string   // resolved theme name (per-workspace or global default)
-		SidebarWidth     int      // resolved sidebar width (per-workspace or global default)
-		Channels         []sidebar.ChannelItem
+		// EnterpriseID is the Enterprise Grid the workspace belongs to
+		// ("" off a grid); GridMember says whether it is a member
+		// workspace rather than the org-level one. On a grid every
+		// workspace's links carry the org's domain, so the domain alone
+		// cannot say which workspace owns an archive channel.
+		EnterpriseID string
+		GridMember   bool
+		Theme        string // resolved theme name (per-workspace or global default)
+		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
+		Channels     []sidebar.ChannelItem
 		// ChannelNames includes known non-member channels for mention rendering.
 		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem
@@ -545,9 +557,16 @@ type (
 		// whether an archive permalink belongs to this workspace.
 		Domain           string
 		PermalinkDomains []string // configured aliases for archive permalink routing
-		Theme            string   // resolved theme name (per-workspace or global default)
-		SidebarWidth     int      // resolved sidebar width (per-workspace or global default)
-		Channels         []sidebar.ChannelItem
+		// EnterpriseID is the Enterprise Grid the workspace belongs to
+		// ("" off a grid); GridMember says whether it is a member
+		// workspace rather than the org-level one. On a grid every
+		// workspace's links carry the org's domain, so the domain alone
+		// cannot say which workspace owns an archive channel.
+		EnterpriseID string
+		GridMember   bool
+		Theme        string // resolved theme name (per-workspace or global default)
+		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
+		Channels     []sidebar.ChannelItem
 		// ChannelNames includes known non-member channels for mention rendering.
 		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem

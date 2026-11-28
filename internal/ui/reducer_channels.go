@@ -221,11 +221,30 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case MessagesAroundLoadedMsg:
 		debuglog.Cache("MessagesAroundLoadedMsg: channel=%s active=%s count=%d err=%v",
 			m.ChannelID, a.activeChannelID, len(m.Messages), m.Err)
+		linkJump := a.permalinkAroundChannel != "" && a.permalinkAroundChannel == m.ChannelID
+		isLink := linkJump && a.permalinkAroundFromLink
+		if linkJump {
+			a.permalinkAroundChannel = ""
+			a.permalinkAroundFromLink = false
+		}
 		if m.ChannelID != a.activeChannelID {
 			return nil, true // stale: user navigated away
 		}
 		if m.Err != nil || len(m.Messages) == 0 {
-			return func() tea.Msg { return ToastMsg{Text: "Failed to load history around message"} }, true
+			if isLink && m.ThreadTS != "" {
+				// Channel history never contains a thread reply; a
+				// stale cache row is the one place its parent is known.
+				return a.reopenLinkAsThread(m), true
+			}
+			text := "Failed to load history around message"
+			if isLink {
+				// A forwarded conversation's link can name a DM the
+				// user is not in; Slack answers channel_not_found for
+				// every workspace, so say that rather than blaming
+				// the history load.
+				text = "That Slack conversation is not available to you"
+			}
+			return func() tea.Msg { return ToastMsg{Text: text} }, true
 		}
 		// Confirm the target is actually in the fetched window BEFORE
 		// replacing the buffer: a failed jump must keep the user's
@@ -239,7 +258,14 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 		}
 		if !found {
-			return func() tea.Msg { return ToastMsg{Text: "Message not found in loaded history"} }, true
+			if isLink && m.ThreadTS != "" {
+				return a.reopenLinkAsThread(m), true
+			}
+			text := "Message not found in loaded history"
+			if isLink {
+				text = "That message is not available"
+			}
+			return func() tea.Msg { return ToastMsg{Text: text} }, true
 		}
 		a.messagepane.SetMessages(m.Messages)
 		a.messagepane.SelectByTS(m.TargetTS)
@@ -294,6 +320,12 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case ChannelJoinFailedMsg:
 		log.Printf("warning: failed to join channel %s: %v", m.Name, m.Err)
+		// A permalink navigation that joined this channel cannot
+		// complete now; drop it rather than let a later load of the
+		// same channel pick up a stale target.
+		if p := a.pendingLinkNav; p != nil && string(p.ChannelID) == m.ID {
+			a.pendingLinkNav = nil
+		}
 		// A join can be refused (a private channel the user cannot enter,
 		// one deleted since the mention was written). Say so: a click
 		// that ends in silence reads as a broken link.

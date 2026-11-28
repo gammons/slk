@@ -667,12 +667,31 @@ type App struct {
 	workspaceDomains map[string]string
 	permalinkDomains map[string][]string
 
+	// workspaceEnterprise maps teamID -> Enterprise Grid ID ("" off a
+	// grid) and workspaceGridMember marks member workspaces (false for
+	// the org-level one), both from WorkspaceReadyMsg /
+	// WorkspaceSwitchedMsg. They let an archive link carrying the grid
+	// org's domain open in the member workspace the user is reading,
+	// where the channel actually lives.
+	workspaceEnterprise map[string]string
+	workspaceGridMember map[string]bool
+
 	// pendingLinkNav tracks an in-flight permalink navigation: the
 	// channel was (or is being) opened and the message-select /
 	// thread-open completes when that channel's messages land. See
 	// reducer_links.go. Every in-app jump (permalinks, marks, history
 	// walks) records its target here via applyLocation.
 	pendingLinkNav *pendingLinkNav
+
+	// permalinkAroundChannel is the channel whose permalink jump
+	// needed a FetchAround. If that fetch comes back empty the target
+	// is not readable (a forwarded DM the user is not in), and the
+	// failure toast says so instead of the generic history message.
+	permalinkAroundChannel string
+	// permalinkAroundFromLink says that around-fetch came from an
+	// archive permalink, not a mark or a history walk; only link jumps
+	// get the link-specific failure wording.
+	permalinkAroundFromLink bool
 
 	// pendingFinderPermalink is an archive link chosen in the channel
 	// finder whose workspace is not the one on screen. Nil when
@@ -1125,6 +1144,8 @@ func NewApp() *App {
 		lastChannelByTeam:     map[string]string{},
 		workspaceDomains:      map[string]string{},
 		permalinkDomains:      map[string][]string{},
+		workspaceEnterprise:   map[string]string{},
+		workspaceGridMember:   map[string]bool{},
 		desktop:               noopDesktopService,
 		editor:                noopEditorService,
 		navHistory:            newNavHistoryStore(),
@@ -1932,8 +1953,13 @@ func (a *App) linkOpensInApp(rawURL string) bool {
 	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return false
 	}
-	_, _, found := a.channels.Lookup(pl.ChannelID)
-	return found
+	if _, _, found := a.channels.Lookup(pl.ChannelID); found {
+		return true
+	}
+	// routeLink opens an unknown DM, group DM or public channel by ID
+	// (joining a channel), so the picker must badge it in-app too.
+	id := string(pl.ChannelID)
+	return id != "" && (id[0] == 'D' || id[0] == 'G' || id[0] == 'C')
 }
 
 func (a *App) saveThreadToFile() tea.Cmd {
@@ -4173,9 +4199,35 @@ func (a *App) activeTeamName() string {
 }
 
 // permalinkBelongsToActiveWorkspace reports whether a parsed archive link
-// uses either the active workspace's auth.test domain or a configured alias.
+// belongs to the active workspace: its auth.test domain, a configured
+// alias, or (for a Grid member workspace) the grid org's domain, which
+// every workspace's links carry.
 func (a *App) permalinkBelongsToActiveWorkspace(pl slackurl.Permalink) bool {
-	return a.permalinkBelongsToTeam(a.activeTeamID, pl)
+	if a.permalinkBelongsToTeam(a.activeTeamID, pl) {
+		return true
+	}
+	return a.gridOrgDomainForActive(pl.Subdomain)
+}
+
+// gridOrgDomainForActive reports whether subdomain is the domain of the
+// Enterprise Grid org workspace the active workspace belongs to. An org
+// token's auth.test URL (redhat.enterprise, say) is the domain every
+// workspace on the grid writes into its links, so on a member workspace
+// the domain cannot distinguish the org's channels from the member's own.
+func (a *App) gridOrgDomainForActive(subdomain string) bool {
+	if subdomain == "" {
+		return false
+	}
+	enterprise := a.workspaceEnterprise[a.activeTeamID]
+	if enterprise == "" || !a.workspaceGridMember[a.activeTeamID] {
+		return false
+	}
+	for teamID, domain := range a.workspaceDomains {
+		if domain == subdomain && a.workspaceEnterprise[teamID] == enterprise && !a.workspaceGridMember[teamID] {
+			return true
+		}
+	}
+	return false
 }
 
 // permalinkBelongsToTeam reports whether pl's subdomain is teamID's

@@ -1135,10 +1135,11 @@ func run() error {
 				}
 				msgItems := fetchMessagesAround(wctx.Client, chIDStr, string(ts), db, wctx.UserNames, tsFormat, router)
 				wctx.Subteams.RequestItems(msgItems)
+				threadTS := cachedThreadTS(db, chIDStr, string(ts))
 				if msgItems == nil {
-					return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), Err: errors.New("history fetch failed")}
+					return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), ThreadTS: threadTS, Err: errors.New("history fetch failed")}
 				}
-				return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), Messages: msgItems}
+				return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), ThreadTS: threadTS, Messages: msgItems}
 			},
 			Join: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
@@ -1147,10 +1148,16 @@ func run() error {
 					return nil
 				}
 				ctx := context.Background()
-				if err := wctx.Client.JoinChannel(ctx, chIDStr); err != nil {
+				joined, err := wctx.Client.JoinChannel(ctx, chIDStr)
+				if err != nil {
 					return ui.ChannelJoinFailedMsg{ID: chIDStr, Name: channelName, Err: err}
 				}
-				return ui.ChannelJoinedMsg{ID: chIDStr, Name: channelName}
+				// A permalink join has no name to start with; Slack's
+				// response carries the real one.
+				if joined == "" {
+					joined = channelName
+				}
+				return ui.ChannelJoinedMsg{ID: chIDStr, Name: joined}
 			},
 		}))
 
@@ -1793,6 +1800,8 @@ func run() error {
 			TeamName:         wctx.TeamName,
 			Domain:           wctx.Client.TeamSubdomain(),
 			PermalinkDomains: snap.PermalinkDomains(teamID),
+			EnterpriseID:     wctx.Client.EnterpriseID(),
+			GridMember:       wctx.Client.IsGridMember(),
 			Theme:            snap.ResolveTheme(teamID),
 			SidebarWidth:     snap.ResolveWidth(teamID),
 			Channels:         channels,
@@ -2098,6 +2107,8 @@ func run() error {
 				TeamName:         wctx.TeamName,
 				Domain:           wctx.Client.TeamSubdomain(),
 				PermalinkDomains: cfgSnap.PermalinkDomains(wctx.TeamID),
+				EnterpriseID:     wctx.Client.EnterpriseID(),
+				GridMember:       wctx.Client.IsGridMember(),
 				Theme:            cfgSnap.ResolveTheme(wctx.TeamID),
 				SidebarWidth:     cfgSnap.ResolveWidth(wctx.TeamID),
 				// Detach both UI snapshots before the event owner starts.
