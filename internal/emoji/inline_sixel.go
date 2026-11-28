@@ -83,6 +83,11 @@ type InlineImage struct {
 	Bytes    []byte
 	Fallback []string
 	Width    int
+	// MarginSGR is the background to repaint the cells right of and
+	// below the image with. Empty for body text, whose neighbours may
+	// hold text; a reaction pill sets it, since the pill cells there
+	// are blank.
+	MarginSGR string
 }
 
 // InlineSixel places emoji as sixel images inside rendered text. It
@@ -146,6 +151,18 @@ func (s *InlineSixel) Place(url string) (string, bool) {
 	idx := len(s.images)
 	s.images = append(s.images, img)
 	return inlineMarker(idx, s.cells), true
+}
+
+// PlaceWithMargin is Place for an emoji whose right and bottom
+// neighbouring cells are blank: the sixel cursor advance paints them
+// with the terminal default, so the caller names the background to
+// repaint them with.
+func (s *InlineSixel) PlaceWithMargin(url, marginSGR string) (string, bool) {
+	marker, ok := s.Place(url)
+	if ok && len(s.images) > 0 {
+		s.images[len(s.images)-1].MarginSGR = marginSGR
+	}
+	return marker, ok
 }
 
 // spawnFetch is spawnEmojiFetch with the sink's fetch context.

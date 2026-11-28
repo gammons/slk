@@ -218,7 +218,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// Reactions on a notice (people do react to "joined the channel"):
 		// the same pills and hit rects as a chat message, left-aligned
 		// under the notice, whose rows start at column 1 (after the border).
-		if block, n, specs := renderReactionPills(msg, rc, opt, noticeWidth, &out); n > 0 {
+		if block, n, specs := renderReactionPills(msg, rc, opt, noticeWidth, &out, nil); n > 0 {
 			rowBase := lipgloss.Height(out.Content)
 			out.Content += block
 			out.Hits = reactionHits(specs, rowBase, 1)
@@ -468,7 +468,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	// reactionLineCount is the number of rendered reaction rows below the
 	// body / attachments; pillSpecs become absolute hit rects below once
 	// the row layout is known.
-	reactionLine, reactionLineCount, pillSpecs := renderReactionPills(msg, rc, opt, contentWidth, &out)
+	reactionLine, reactionLineCount, pillSpecs := renderReactionPills(msg, rc, opt, contentWidth, &out, inlineSixel)
 
 	// Pre-attachment row count, so attachment rows can compute their
 	// absolute row index (the sixel entry's row).
