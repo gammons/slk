@@ -519,6 +519,31 @@ func run() error {
 			}
 		}
 	}
+	if proto != imgpkg.ProtoKitty &&
+		imgpkg.IsAutoProtocol(cfg.Appearance.ImageProtocol) &&
+		os.Getenv("TMUX") == "" && os.Getenv("ZELLIJ") == "" &&
+		term.IsTerminal(int(os.Stdin.Fd())) {
+		state, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			debuglog.ImgRender("kitty probe skipped: cannot enter raw mode: %v", err)
+		} else {
+			ok := imgpkg.ProbeKittyGraphics(os.Stdout, os.Stdin, 200*time.Millisecond)
+			if rerr := term.Restore(int(os.Stdin.Fd()), state); rerr != nil {
+				debuglog.ImgRender("term restore after kitty probe: %v", rerr)
+			}
+			if ok {
+				proto = imgpkg.ProtoKitty
+				placement = imgpkg.KittyNative
+				if emulationAllowed(runtime.GOOS, cfg.Appearance.KittyPlacement) {
+					if w, h, measured := startupCellPixels(proto); measured {
+						pxW, pxH = w, h
+						placement = imgpkg.KittyEmulated
+					}
+				}
+				debuglog.ImgRender("kitty probe succeeded; preferring kitty over sixel/halfblock placement=%s", placement)
+			}
+		}
+	}
 	debuglog.ImgRender("image protocol: %s", proto)
 
 	// Ask the terminal itself whether it measures text by grapheme
