@@ -862,6 +862,12 @@ type App struct {
 	// publication.
 	forceSixelRepaint bool
 
+	// sixelInitialClearScheduled is set when the first active channel
+	// load schedules one delayed full redraw. The first layout can move
+	// avatars under already painted sixel pixels, leaving black blocks
+	// until something forces a repaint.
+	sixelInitialClearScheduled bool
+
 	// kittyFrame memoizes the last frame resolved for kitty emulated
 	// placement (kitty_emulated.go).
 	kittyFrame kittyFrameMemo
@@ -4451,6 +4457,14 @@ func (a *App) View() tea.View {
 			time.Since(viewPerfStart), memoHit, a.width, a.height,
 			int(a.focusedPanel), int(a.view), a.mode.String(),
 			a.threadVisible, a.sidebarVisible, previewActive)
+	}
+	for _, mp := range a.winModels {
+		if mp.TakeScrollDirty() {
+			a.forceSixelRepaint = true
+		}
+	}
+	if a.threadPanel.TakeScrollDirty() {
+		a.forceSixelRepaint = true
 	}
 	return a.finalizeSixelView(v, a.collectSixelPlacements(frame))
 }

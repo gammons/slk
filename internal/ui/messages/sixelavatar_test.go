@@ -76,16 +76,19 @@ func TestView_SixelAvatarIsPlaced(t *testing.T) {
 	if got[0].Col != 1 || got[0].Cols != 4 || got[0].Rows != 2 {
 		t.Errorf("avatar placement = %+v, want col 1, 4x2", got[0])
 	}
-	if got[0].MarginSGR != MarginBgANSI(false, false, false) {
-		t.Errorf("avatar MarginSGR = %q, want the theme background %q", got[0].MarginSGR, MarginBgANSI(false, false, false))
+	if got[0].MarginSGR != SelectionTintBgANSI(false) {
+		t.Errorf("selected avatar MarginSGR = %q, want the selection tint %q", got[0].MarginSGR, SelectionTintBgANSI(false))
 	}
 }
 
 // A message that mentions the user paints its avatar gutter on the
 // mention tint; the sixel margin must be repainted with the same colour.
 func TestView_SixelAvatarMarginUsesMentionTint(t *testing.T) {
-	msg := MessageItem{TS: "1700000000.000000", UserName: "lola", UserID: "U1", Text: "hello <@U9>", Timestamp: "11:08 AM"}
-	m := New([]MessageItem{msg}, "general")
+	msgs := []MessageItem{
+		{TS: "1700000000.000000", UserName: "lola", UserID: "U1", Text: "hello <@U9>", Timestamp: "11:08 AM"},
+		{TS: "1700000001.000000", UserName: "max", UserID: "U2", Text: "second", Timestamp: "11:09 AM"},
+	}
+	m := New(msgs, "general")
 	m.SetCurrentUser("U9")
 	m.SetAvatarFunc(func(string) string { return "AVAV\nAVAV" })
 	m.SetSixelAvatarFunc(func(userID string) (string, []byte, bool) {
@@ -93,10 +96,30 @@ func TestView_SixelAvatarMarginUsesMentionTint(t *testing.T) {
 	})
 	_ = m.View(30, 100)
 	got := m.SixelPlacements()
+	if len(got) != 2 {
+		t.Fatalf("SixelPlacements() = %+v, want both avatars", got)
+	}
+	if got[0].MarginSGR != MentionTintBgANSI() {
+		t.Errorf("mention avatar MarginSGR = %q, want the mention tint %q", got[0].MarginSGR, MentionTintBgANSI())
+	}
+}
+
+// Hiding the cursor drops the selection tint without moving the cursor
+// index. The avatar keeps its normal margin then.
+func TestView_SixelAvatarMarginKeptWhenCursorHidden(t *testing.T) {
+	msg := MessageItem{TS: "1700000000.000000", UserName: "lola", UserID: "U1", Text: "hello", Timestamp: "11:08 AM"}
+	m := New([]MessageItem{msg}, "general")
+	m.SetAvatarFunc(func(string) string { return "AVAV\nAVAV" })
+	m.SetSixelAvatarFunc(func(userID string) (string, []byte, bool) {
+		return "avatar-" + userID, []byte("\x1bPq#0~-\x1b\\"), true
+	})
+	m.SetCursorHighlight(false)
+	_ = m.View(30, 100)
+	got := m.SixelPlacements()
 	if len(got) != 1 {
 		t.Fatalf("SixelPlacements() = %+v, want the avatar's one", got)
 	}
-	if got[0].MarginSGR != MentionTintBgANSI() {
-		t.Errorf("avatar MarginSGR = %q, want the mention tint %q", got[0].MarginSGR, MentionTintBgANSI())
+	if got[0].MarginSGR != BgANSI() {
+		t.Errorf("MarginSGR = %q with the cursor hidden, want the theme background %q", got[0].MarginSGR, BgANSI())
 	}
 }

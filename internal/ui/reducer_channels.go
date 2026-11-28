@@ -63,6 +63,7 @@ import (
 
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/ids"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -76,6 +77,16 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		refused := a.compose.Uploading() || a.threadCompose.Uploading()
 		cmd, fetchFired := reduceChannelSelected(a, m)
 		cmd = tea.Batch(cmd, a.closeOffscreenActionPrompt())
+		if a.imgProtocol == imgpkg.ProtoSixel && !a.sixelInitialClearScheduled {
+			// Sixel pixels belong to the old conversation. Clear them
+			// after the new frame has settled, or they stay as black
+			// blocks over the new one. Delay so the clear cannot land
+			// after the new images were painted.
+			a.sixelInitialClearScheduled = true
+			cmd = tea.Batch(cmd, tea.Tick(700*time.Millisecond, func(time.Time) tea.Msg {
+				return sixelInitialClearMsg{}
+			}))
+		}
 		if refused {
 			// reduceChannelSelected refused the switch, so a pending
 			// jump to this channel must not complete — not against
@@ -190,7 +201,17 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// (completePendingLinkNav selects in a.messagepane), so keep
 		// the legacy active-channel gate.
 		if m.ChannelID == a.activeChannelID {
-			return a.completePendingLinkNav(m.ChannelID, true), true
+			var cmds []tea.Cmd
+			if cmd := a.completePendingLinkNav(m.ChannelID, true); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if !a.sixelInitialClearScheduled {
+				a.sixelInitialClearScheduled = true
+				cmds = append(cmds, tea.Tick(700*time.Millisecond, func(time.Time) tea.Msg {
+					return sixelInitialClearMsg{}
+				}))
+			}
+			return tea.Batch(cmds...), true
 		}
 		return nil, true
 

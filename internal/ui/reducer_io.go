@@ -74,6 +74,11 @@ import (
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
+// sixelInitialClearMsg fires once after the first active channel load and
+// repaints the screen, clearing sixel pixels that the first layout move
+// left behind.
+type sixelInitialClearMsg struct{}
+
 // toastTick schedules a toast's clear. A variable so a test can swap in a
 // tick that never fires and read the toast, instead of waiting out a real
 // timer.
@@ -325,6 +330,11 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// a.compose.emojiPicker / a.threadCompose.emojiPicker keep
 		// the surface symmetric. Listed here for the audit trail.
 		return nil, true
+
+	case sixelInitialClearMsg:
+		a.sixelInitialClearScheduled = false
+		a.forceSixelRepaint = true
+		return tea.ClearScreen, true
 
 	case messages.AvatarReadyMsg:
 		// A lazy avatar fetch landed for m.UserID. Both the

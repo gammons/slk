@@ -43,6 +43,8 @@ type Model struct {
 	selected         int
 	focused          bool
 	hideCursor       bool // selected-row tint and bar hidden; the cursor index stays
+	lastYOffset      int  // scroll detection for sixel repaint
+	scrollDirty      bool
 	coloredUsernames bool
 	compact          bool
 	showAvatars      bool
@@ -629,6 +631,14 @@ func (m *Model) SetCursorHighlight(on bool) {
 	}
 	m.hideCursor = hide
 	m.dirty()
+}
+
+// TakeScrollDirty reports whether the pane scrolled since the last call
+// and clears the flag. The App uses it to force one sixel repaint.
+func (m *Model) TakeScrollDirty() bool {
+	d := m.scrollDirty
+	m.scrollDirty = false
+	return d
 }
 
 // Focused returns whether the thread panel has focus.
@@ -1343,7 +1353,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				return nil
 			}, nil,
 			func(i int) string {
-				return messages.MarginBgANSI(m.selected == parentSelected, m.focused, parentRendered.MentionsSelf)
+				return messages.MarginBgANSI(m.selected == parentSelected && !m.hideCursor, m.focused, parentRendered.MentionsSelf)
 			})
 		rows := m.list.Compose(frame, "", "", applySelection)
 		return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
@@ -1450,7 +1460,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	sixel := make([][]messages.SixelImage, 0, cap(entries))
 	margins := make([]string, 0, cap(entries))
 	sixel = append(sixel, parentRendered.SixelRows)
-	margins = append(margins, messages.MarginBgANSI(m.selected == parentSelected, m.focused, parentRendered.MentionsSelf))
+	margins = append(margins, messages.MarginBgANSI(m.selected == parentSelected && !m.hideCursor, m.focused, parentRendered.MentionsSelf))
 	lastDate := messages.DateFromTS(m.parent.TS)
 	landmarkInserted := false
 	for i, e := range m.replyEntries {
@@ -1468,7 +1478,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		}
 		entries = append(entries, e)
 		sixel = append(sixel, m.cache[i].SixelRows)
-		margins = append(margins, messages.MarginBgANSI(m.selected == i, m.focused, m.cache[i].MentionsSelf))
+		margins = append(margins, messages.MarginBgANSI(m.selected == i && !m.hideCursor, m.focused, m.cache[i].MentionsSelf))
 		if i < len(m.replyEntries)-1 {
 			entries = append(entries, decoration(replySeparator))
 			sixel = append(sixel, nil)
@@ -1502,6 +1512,10 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// reply hits (content-relative), overlay the selection, draw the
 	// scrollbar.
 	frame := m.list.Layout(m.selected, m.cursorLines)
+	if off := m.list.YOffset(); off != m.lastYOffset {
+		m.lastYOffset = off
+		m.scrollDirty = true
+	}
 	m.sixelPaints = messages.PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), replyAreaHeight,
 		func(i int) []messages.SixelImage { return sixel[i] }, nil,
 		func(i int) string { return margins[i] })
