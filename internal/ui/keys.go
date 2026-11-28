@@ -58,6 +58,8 @@ type KeyMap struct {
 	DraftsList          key.Binding
 	NextUnread          key.Binding
 	PrevUnread          key.Binding
+	NextMention         key.Binding
+	PrevMention         key.Binding
 	ActivityView        key.Binding
 	ActivityUnread      key.Binding
 	AppHome             key.Binding
@@ -153,6 +155,8 @@ func DefaultKeyMap() KeyMap {
 		DraftsList:     key.NewBinding(key.WithHelp(":drafts", "list Slack drafts")),
 		NextUnread:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "next unread channel")),
 		PrevUnread:     key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "prev unread channel")),
+		NextMention:    key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "next channel with mentions")),
+		PrevMention:    key.NewBinding(key.WithKeys("Z"), key.WithHelp("Z", "prev channel with mentions")),
 		ActivityView:   key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a / :activity", "open activity")),
 		ActivityUnread: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "Activity: toggle unread-only")),
 		AppHome:        key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "app: home tab / messages")),

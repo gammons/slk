@@ -198,3 +198,56 @@ func TestNextUnread_RespectsActiveFilter(t *testing.T) {
 		t.Fatalf("with filter 'four' C4 is the only unread; anchoring on it should find nothing else")
 	}
 }
+
+// C1 has a mention, C2 is plain unread, C3 is muted with a mention, C4
+// is a DM with a mention count but already read (stale count). Walk
+// order is C4 (four), C3 (muted), C1 (one), C2 (two).
+func mentionNavModel() Model {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "one", Type: "channel", Section: "Eng"},
+		{ID: "C2", Name: "two", Type: "channel", Section: "Eng"},
+		{ID: "C3", Name: "muted", Type: "channel", Section: "Eng", IsMuted: true},
+		{ID: "C4", Name: "four", Type: "dm", Section: "Eng"},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState {
+		return map[string]cache.ReadState{
+			"C1": {HasUnread: true, MentionCount: 2},
+			"C2": {HasUnread: true},
+			"C3": {HasUnread: true, MentionCount: 1},
+			"C4": {MentionCount: 3},
+		}
+	})
+	return m
+}
+
+func TestNextMention_SkipsPlainUnreadAndStaleCounts(t *testing.T) {
+	m := mentionNavModel()
+	// From C1: skip plain-unread C2 and stale C4, land on muted C3.
+	if id, _, _, ok := m.NextMention("C1", 1); !ok || id != "C3" {
+		t.Fatalf("from C1 want C3, got id=%q ok=%v", id, ok)
+	}
+	// From C3: back to C1.
+	if id, _, _, ok := m.NextMention("C3", 1); !ok || id != "C1" {
+		t.Fatalf("from C3 want C1, got id=%q ok=%v", id, ok)
+	}
+	// Backward from C2: C1 comes first.
+	if id, _, _, ok := m.NextMention("C2", -1); !ok || id != "C1" {
+		t.Fatalf("prev from C2 want C1, got id=%q ok=%v", id, ok)
+	}
+}
+
+func TestNextMention_NoOtherMention(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "one", Type: "channel"},
+		{ID: "C2", Name: "two", Type: "channel"},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState {
+		return map[string]cache.ReadState{
+			"C1": {HasUnread: true, MentionCount: 1},
+			"C2": {HasUnread: true},
+		}
+	})
+	if _, _, _, ok := m.NextMention("C1", 1); ok {
+		t.Fatalf("only the current channel has a mention: want ok=false")
+	}
+}

@@ -103,6 +103,19 @@ func unreadOpts() []testOpt {
 	}
 }
 
+// seedMentions makes C2 plain unread and gives C3 and C4 a mention
+// badge, so z/Z have a plain unread to skip on the way forward.
+func seedMentions(t *testing.T, a *App) {
+	t.Helper()
+	a.setReadStateReaderForTest(func() map[string]cache.ReadState {
+		return map[string]cache.ReadState{
+			"C2": {HasUnread: true},
+			"C3": {HasUnread: true, MentionCount: 1},
+			"C4": {HasUnread: true, MentionCount: 1},
+		}
+	})
+}
+
 // seedUnreads marks C2 and C4 (the active channel's forward and
 // backward neighbours in unreadOpts' walk order) unread, then asserts
 // the two directions really do resolve to different channels. Without
@@ -1960,6 +1973,62 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// The walk is alphabetical: design (C3), general (C1),
+			// ops (C2), random (C4). C2 is plain unread, so z must skip
+			// it and land on C4.
+			name:     "z opens the next channel with mentions, skipping plain unreads",
+			opts:     unreadOpts(),
+			setup:    seedMentions,
+			key:      keyPress('z'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
+				}
+				want := ChannelSelectedMsg{ID: "C4", Name: "random", Type: "channel"}
+				if msg := cmd(); msg != want {
+					t.Errorf("cmd() = %+v, want %+v", msg, want)
+				}
+				if got := a.sidebar.SelectedID(); got != "C4" {
+					t.Errorf("sidebar SelectedID = %q, want %q", got, "C4")
+				}
+			},
+		},
+		{
+			name:     "Z opens the previous channel with mentions",
+			opts:     unreadOpts(),
+			setup:    seedMentions,
+			key:      keyPress('Z'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
+				}
+				want := ChannelSelectedMsg{ID: "C3", Name: "design", Type: "channel"}
+				if msg := cmd(); msg != want {
+					t.Errorf("cmd() = %+v, want %+v", msg, want)
+				}
+			},
+		},
+		{
+			name:     "z with no mentions toasts",
+			opts:     unreadOpts(),
+			setup:    seedUnreads,
+			key:      keyPress('z'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := statusbarText(a); !strings.Contains(got, "No other channels with mentions") {
+					t.Errorf("statusbar = %q, want the no-mentions toast", got)
+				}
+				if cmd == nil {
+					t.Error("cmd = nil, want the toast-clear tick")
+				}
+				if got := a.sidebar.SelectedID(); got == "C2" || got == "C4" {
+					t.Errorf("sidebar moved to %q, want no jump without mentions", got)
+				}
+			},
+		},
+		{
 			name: "a with nothing unread toasts",
 			opts: normalOpts(),
 			setup: func(t *testing.T, a *App) {
@@ -2276,7 +2345,7 @@ func TestNormalModeKeys(t *testing.T) {
 			name:     "an unbound printable key is inert",
 			opts:     normalOpts(),
 			setup:    focusMessages,
-			key:      keyPress('z'),
+			key:      keyPress('X'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
 				if got := a.messagepane.SelectedIndex(); got != 4 {
